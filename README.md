@@ -81,10 +81,5 @@ Since there is no trading logic yet, the tests in `test_baseline.py` act as a pr
 3. **Failure Modes:** `test_negative` intentionally triggers a `ZeroDivisionError` to prove that our code correctly reverts on bad input instead of failing silently.
 
 ## Linting
-
 Code is automatically formatted and linted on every commit via `pre-commit` (using `black` and `ruff`).
 
-## Limitations / Assumptions
-
-* **No Trading Logic:** This baseline contains no exchange APIs or market data handlers yet.
-* **Execution Environment:** Assumes a standard local Python 3.x environment. Dockerization is not part of this baseline.
