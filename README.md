@@ -10,14 +10,19 @@
 - Wrote 3 placeholder tests to verify the CI pipeline and test runner.
 
 ## Project Structure
-```text
+```Plaintext
 peanut-internship-2026/
   configs/
+    .gitkeep
   docs/
+    .gitkeep
   scripts/
+    .gitkeep
   src/
+    __init__.py
     main.py
   tests/
+    __init__.py
     test_baseline.py
   .env.example
   .gitignore
