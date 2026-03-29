@@ -88,6 +88,3 @@ Code is automatically formatted and linted on every commit via `pre-commit` (usi
 
 * **No Trading Logic:** This baseline contains no exchange APIs or market data handlers yet.
 * **Execution Environment:** Assumes a standard local Python 3.x environment. Dockerization is not part of this baseline.
-
-```
-```
