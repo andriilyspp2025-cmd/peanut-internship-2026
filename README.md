@@ -60,7 +60,7 @@ make run
 **Output example:**
 
 ```text
-Peanut Quant Baseline is running! All systems green.
+Peanut Quant Baseline is running! All work.
 ```
 
 ## Tests & Mini Design Memo
