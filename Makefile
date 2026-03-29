@@ -1,7 +1,7 @@
 .PHONY: run test
 
 run:
-	@echo "Running Peanut Quant Baseline..."
+	python src/main.py
 
 test:
 	python -m pytest tests/
