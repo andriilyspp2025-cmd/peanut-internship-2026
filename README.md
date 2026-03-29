@@ -1,4 +1,4 @@
-````markdown
+
 # Peanut Trade Internship: Lab -1 Baseline
 
 ## What has been done
@@ -25,7 +25,7 @@ peanut-internship-2026/
   Makefile
   README.md
   requirements.txt
-````
+
 
 ## Setup
 
