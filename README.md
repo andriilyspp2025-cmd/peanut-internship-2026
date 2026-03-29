@@ -25,7 +25,7 @@ peanut-internship-2026/
   Makefile
   README.md
   requirements.txt
-
+```
 
 ## Setup
 
