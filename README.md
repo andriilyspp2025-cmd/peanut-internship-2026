@@ -1,29 +1,64 @@
+# Peanut Trade Internship: Week 1 Assignment
 
-# Peanut Trade Internship: Lab -1 Baseline
+## Project Context
+This repository contains the foundation of an arbitrage trading system. Week 1 focuses on two core modules:
+- `core/` — wallet management, signing, base types
+- `chain/` — blockchain interaction, transaction handling, receipt parsing
 
 ## What has been done
-- Created the core project structure (`src/`, `tests/`, `configs/`, `docs/`, `scripts/`).
-- Set up `main.py` as the entry point.
-- Configured CI tools (`black`, `ruff`, `pre-commit`).
-- Added a `Makefile` for quick commands.
-- Secured secrets with `.env.example` and `.gitignore`.
-- Wrote 3 placeholder tests to verify the CI pipeline and test runner.
+- Implemented the `WalletManager` with strong privacy protections.
+- Created `CanonicalSerializer` for deterministic JSON serialization for signatures.
+- Defined immutable primitives (`Address`, `Token`, `TokenAmount`) handling strict decimal mathematics and checksum validation avoiding floats.
+- Implemented `ChainClient` with robust RPC fallback and retry logic.
+- Built a fluent `TransactionBuilder` for simplifying Ethereum transactions, gas estimation, and dynamic nonce mapping.
+- Created a `TransactionAnalyzer` CLI tool that intercepts, decodes, and formats any transaction hash into an analytical summary.
+- Deployed a comprehensive `pytest` test suite with 37 edge-case tests.
+- Successfully executed a Live Integration Test on the Sepolia testnet!
+
+### Sepolia Testnet Proof
+**Successful Transaction Hash:** `0x6ef70e2825c1dac8f1a8ce0b73a1ea0f94d0513fe5f9532b84bfbd8465bf5e51`
+(Sent 0.0001 ETH from myself to myself)
 
 ## Project Structure
 ```Plaintext
 peanut-internship-2026/
   configs/
-    .gitkeep
   docs/
-    .gitkeep
   scripts/
-    .gitkeep
+    integration_test.py
   src/
+    chain/
+      analyzer.py
+      builder.py
+      client.py
+      errors.py
+      __init__.py
+    core/
+      serializer.py
+      types.py
+      wallet.py
+      __init__.py
+    exchange/
+    executor/
+    inventory/
+    pricing/
+    safety/
+    strategy/
     __init__.py
     main.py
   tests/
-    __init__.py
+    unit/
+      chain/
+        test_analyzer.py
+        test_builder.py
+        test_client.py
+      core/
+        test_serializer.py
+        test_token.py
+        test_types.py
+        test_wallet.py
     test_baseline.py
+    __init__.py
   .env.example
   .gitignore
   .pre-commit-config.yaml
@@ -34,52 +69,44 @@ peanut-internship-2026/
 
 ## Setup
 
-1. Install dependencies and pre-commit hooks:
-
+1. Install dependencies:
 ```bash
 pip install -r requirements.txt
-pre-commit install
 ```
 
 2. Set up your local environment (never commit `.env`!):
-
 ```bash
 cp .env.example .env
 ```
+Make sure to add your `PRIVATE_KEY` and `SEPOLIA_RPC_URL` to `.env`.
 
 ## How to Run
 
-Run the main script:
-
+### Tests
+Run the full 37-test suite:
 ```bash
-make run
+python -m pytest tests
 ```
 
-*(If `make` is not available on Windows: `python src/main.py`)*
-
-**Output example:**
-
-```text
-Peanut Quant Baseline is running! All work.
-```
-
-## Tests & Mini Design Memo
-
-Run the tests:
-
+### Integration Test
+Run the live integration script on Sepolia:
 ```bash
-make test
+python scripts/integration_test.py
 ```
 
-*(If `make` is not available on Windows: `python -m pytest tests/`)*
+### Transaction Analyzer CLI
+Analyze any transaction (Mainnet or Sepolia):
+```bash
+python -m src.chain.analyzer <tx_hash> --rpc <RPC_URL>
+```
+*Example on Sepolia:*
+```bash
+python -m src.chain.analyzer 0x6ef70e2825c1dac8f1a8ce0b73a1ea0f94d0513fe5f9532b84bfbd8465bf5e51 --rpc <YOUR_SEPOLIA_RPC>
+```
 
-**What is tested and why (Design Memo):**
-Since there is no trading logic yet, the tests in `test_baseline.py` act as a proof-of-concept for our testing infrastructure:
-
-1. **Determinism:** `test_determinism` checks that identical operations yield the exact same result every time.
-2. **Invariants:** `test_invariant` verifies a basic mathematical truth (additive identity) to ensure the runner catches logic errors.
-3. **Failure Modes:** `test_negative` intentionally triggers a `ZeroDivisionError` to prove that our code correctly reverts on bad input instead of failing silently.
-
-## Linting
-Code is automatically formatted and linted on every commit via `pre-commit` (using `black` and `ruff`).
+## Architecture Decisions (Design Memo)
+1. **No Floats Policy:** `TokenAmount` strictly rejects Python floats and forces users to use `Decimal` or strings when dealing with tokens. This is because floating point math leads to dust inaccuracies in DeFi.
+2. **RPC Fallback Ring:** `ChainClient` keeps an array of RPC URLs and aggressively rotates them on `429 Too Many Requests` or timeouts, pausing exponentially between retries. This is a critical feature for HFT systems where public endpoint failures are frequent.
+3. **Wallet Security:** The core `WalletManager` wraps private keys closely and permanently overrides `__repr__` and `__str__` to ensure the private key cannot accidentally leak to logs or terminal tracebacks.
+4. **Token Identity:** `Token` equality (`__eq__`) and `hash` ignore metadata (like `symbol` and `decimals`) and rely purely on the underlying lowercased smart contract `Address`.
 
