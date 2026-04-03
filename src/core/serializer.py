@@ -85,3 +85,18 @@ class CanonicalSerializer:
     def hash(cls, obj: Any) -> bytes:
         """Повертає Keccak-256 хеш канонічної серіалізації."""
         return keccak(cls.serialize(obj))
+
+    @staticmethod
+    def verify_determinism(obj: Any, iterations: int = 100) -> bool:
+        """Verifies serialization is deterministic over N iterations."""
+        if iterations <= 0:
+            raise ValueError("Iterations must be positive")
+
+        try:
+            first_run = CanonicalSerializer.serialize(obj)
+            for _ in range(iterations - 1):
+                if CanonicalSerializer.serialize(obj) != first_run:
+                    return False
+            return True
+        except Exception:
+            return False

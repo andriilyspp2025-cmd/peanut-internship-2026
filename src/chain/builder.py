@@ -139,7 +139,7 @@ class TransactionBuilder:
         final_nonce = (
             self._nonce
             if self._nonce is not None
-            else self.client.get_nonce(self.wallet.address)
+            else self.client.get_nonce(Address(self.wallet.address))
         )
 
         return TransactionRequest(
