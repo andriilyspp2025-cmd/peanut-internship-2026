@@ -2,3 +2,6 @@ pytest
 black
 ruff
 pre-commit
+web3
+eth-account
+eth-utils
