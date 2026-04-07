@@ -46,11 +46,18 @@ def main():
     # 2. Initialize Client
     client = ChainClient(rpc_urls=[rpc_url], timeout=30)
     balance = client.get_balance(my_address)
-
     print(f"⚖️ Current Balance: {balance.human} ETH")
 
-    if balance.human < 0.0001:
-        print("❌ Error: Insufficient balance. Need at least 0.0001 ETH on Sepolia.")
+    # Рахуємо реальну вартість: 0.0001 ETH + максимальна комісія за газ (стандарт 21000)
+    gas_price_info = client.get_gas_price()
+    max_fee_per_gas = gas_price_info.get_max_fee("medium")
+    required_wei = int(0.0001 * 10**18) + (21000 * max_fee_per_gas)
+
+    if balance.raw < required_wei:
+        required_eth = required_wei / 10**18
+        print(
+            f"❌ Error: Insufficient balance. Need at least {required_eth:.6f} ETH (amount + gas)."
+        )
         sys.exit(1)
 
     # 3. Build Transaction (Sending 0.0001 ETH to yourself)

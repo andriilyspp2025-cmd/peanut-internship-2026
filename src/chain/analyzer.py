@@ -368,7 +368,7 @@ def main():
 
             def _serializer(obj):
                 if isinstance(obj, Decimal):
-                    return float(obj)
+                    return str(obj)
                 raise TypeError
 
             print(json.dumps(analysis, indent=2, default=_serializer))
