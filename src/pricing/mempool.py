@@ -56,7 +56,7 @@ class MempoolMonitor:
             raise ConnectionError("Failed to connect to WSS provider")
 
         log.info("Connected to WSS. Listening to mempool...")
-        subscription = await self.w3.eth.subscribe("pending_transactions")
+        await self.w3.eth.subscribe("pending_transactions")
 
         async for message in self.w3.socket.process_subscriptions():
             result = message.get("result") or message.get("params", {}).get("result")
@@ -170,7 +170,7 @@ class MempoolMonitor:
         log.info(f"Subscribing to Sync events for {len(pool_addresses)} pools...")
 
         try:
-            subscription = await self.w3.eth.subscribe(
+            await self.w3.eth.subscribe(
                 "logs",
                 {
                     "address": pool_addresses,
