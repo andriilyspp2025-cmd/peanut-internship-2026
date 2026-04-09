@@ -1,7 +1,11 @@
-pytest
-black
-ruff
+web3>=6.0.0
+eth-abi>=4.0.0
+eth-account>=0.8.0
+python-dotenv>=1.0.0
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+black>=23.0.0
+ruff>=0.1.0
+mypy>=1.5.0
 pre-commit
-web3
-eth-account
-eth-utils
