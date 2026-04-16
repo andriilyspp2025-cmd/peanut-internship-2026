@@ -1,35 +1,19 @@
-.PHONY: install test test-cov lint format clean fork
+\.PHONY: install test format lint check demo-arb
 
-# Встановлення залежностей
 install:
-	pip install -r requirements.txt
+	python -m pip install --upgrade pip
+	python -m pip install -r requirements.txt
 
-# Запуск усіх тестів
 test:
 	python -m pytest tests/ -v
 
-# Запуск тестів із покриттям (coverage)
-test-cov:
-	python -m pytest tests/ --cov=src --cov-report=term-missing
-
-# Перевірка якості коду (лінтери)
-lint:
-	ruff check src/ tests/
-
-	mypy src/
-
-# Автоматичне форматування коду
 format:
-	black src/ tests/
+	python -m black src/ tests/
 
-	ruff check --fix src/ tests/
+lint:
+	python -m ruff check src/ tests/
 
-# Очищення тимчасових файлів
-clean:
-	find . -type d -name "__pycache__" -exec rm -rf {} +
+check: format lint test
 
-	find . -type d -name ".pytest_cache" -exec rm -rf {} +
-
-# Запуск локального форку
-fork:
-	bash scripts/start_fork.sh
+demo-arb:
+	python -m src.integration.arb_checker ETH/USDT --size 2.0
