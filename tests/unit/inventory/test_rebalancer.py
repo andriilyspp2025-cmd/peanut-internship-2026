@@ -10,7 +10,7 @@ from src.inventory.rebalancer import RebalancePlanner, TransferPlan
 def mock_tracker():
     tracker = MagicMock(spec=InventoryTracker)
 
-    def skew(asset):
+    def skew(asset, target_ratio=None):
         if asset == "ETH":
             return {
                 "needs_rebalance": True,
@@ -40,7 +40,7 @@ def mock_tracker():
             }
         return {}
 
-    def get_skews():
+    def get_skews(target_ratio=None):
         return [
             {"asset": "ETH", "needs_rebalance": True},
             {"asset": "USDT", "needs_rebalance": False},
