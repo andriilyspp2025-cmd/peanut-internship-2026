@@ -1,4 +1,5 @@
 import csv
+import matplotlib.pyplot as plt
 from decimal import Decimal
 from dataclasses import dataclass
 from datetime import datetime
@@ -19,6 +20,7 @@ class TradeLeg:
     price: Decimal  # Execution price
     fee: Decimal
     fee_asset: str
+    fee_usd: Decimal = Decimal("0")  # Fee converted to USD
 
 
 @dataclass
@@ -41,7 +43,7 @@ class ArbRecord:
     @property
     def total_fees(self) -> Decimal:
         """All fees: both legs + gas."""
-        return self.buy_leg.fee + self.sell_leg.fee + self.gas_cost_usd
+        return self.buy_leg.fee_usd + self.sell_leg.fee_usd + self.gas_cost_usd
 
     @property
     def net_pnl(self) -> Decimal:
@@ -169,11 +171,13 @@ class PnLEngine:
             "sell_price": str(trade.sell_leg.price),
             "sell_fee": str(trade.sell_leg.fee),
             "sell_fee_asset": trade.sell_leg.fee_asset,
+            "sell_fee_usd": str(trade.sell_leg.fee_usd),
             "gas_cost_usd": str(trade.gas_cost_usd),
             "gross_pnl_usd": str(trade.gross_pnl),
             "total_fees_usd": str(trade.total_fees),
             "net_pnl_usd": str(trade.net_pnl),
             "net_pnl_bps": str(trade.net_pnl_bps),
+            "buy_fee_usd": str(trade.buy_leg.fee_usd),
         }
 
     def export_csv(self, filepath: str):
@@ -189,6 +193,7 @@ class PnLEngine:
                 "buy_price",
                 "buy_fee",
                 "buy_fee_asset",
+                "buy_fee_usd",
                 "sell_venue",
                 "sell_symbol",
                 "sell_side",
@@ -196,6 +201,7 @@ class PnLEngine:
                 "sell_price",
                 "sell_fee",
                 "sell_fee_asset",
+                "sell_fee_usd",
                 "gas_cost_usd",
                 "gross_pnl_usd",
                 "total_fees_usd",
@@ -206,3 +212,30 @@ class PnLEngine:
             writer.writeheader()
             for trade in self.trades:
                 writer.writerow(self._trade_summary(trade))
+
+    def export_chart(self, filepath: str = "pnl_chart.png"):
+        """Stretch Goal: Export cumulative PnL chart."""
+        if not self.trades:
+            return
+
+        times = [t.timestamp for t in self.trades]
+
+        # Рахуємо накопичувальний (cumulative) PnL
+        cumulative_pnl = []
+        current = Decimal("0")
+        for t in self.trades:
+            current += t.net_pnl
+            cumulative_pnl.append(float(current))
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(
+            times, cumulative_pnl, marker="o", linestyle="-", color="green", linewidth=2
+        )
+        plt.title("Cumulative Net PnL Over Time")
+        plt.xlabel("Time")
+        plt.ylabel("Net PnL (USD)")
+        plt.grid(True, linestyle="--", alpha=0.7)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(filepath)
+        plt.close()

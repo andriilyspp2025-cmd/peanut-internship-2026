@@ -3,14 +3,14 @@ from decimal import Decimal
 from unittest.mock import MagicMock
 
 from src.inventory.tracker import Venue, InventoryTracker
-from src.inventory.rebalencer import RebalancePlanner, TransferPlan
+from src.inventory.rebalancer import RebalancePlanner, TransferPlan
 
 
 @pytest.fixture
 def mock_tracker():
     tracker = MagicMock(spec=InventoryTracker)
 
-    def skew(asset):
+    def skew(asset, target_ratio=None):
         if asset == "ETH":
             return {
                 "needs_rebalance": True,
@@ -40,7 +40,7 @@ def mock_tracker():
             }
         return {}
 
-    def get_skews():
+    def get_skews(target_ratio=None):
         return [
             {"asset": "ETH", "needs_rebalance": True},
             {"asset": "USDT", "needs_rebalance": False},

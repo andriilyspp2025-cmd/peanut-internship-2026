@@ -73,13 +73,19 @@ class OrderBookAnalyzer:
             avg_price = total_cost / filled_qty
 
             if side == "buy":
-                slippage_bps = ((avg_price - best_price) / best_price) * Decimal(
-                    "10000"
-                )
+                if best_price > Decimal("0"):
+                    slippage_bps = ((avg_price - best_price) / best_price) * Decimal(
+                        "10000"
+                    )
+                else:
+                    slippage_bps = Decimal("0")
             else:
-                slippage_bps = ((best_price - avg_price) / best_price) * Decimal(
-                    "10000"
-                )
+                if best_price > Decimal("0"):
+                    slippage_bps = ((best_price - avg_price) / best_price) * Decimal(
+                        "10000"
+                    )
+                else:
+                    slippage_bps = Decimal("0")
         else:
             avg_price = Decimal("0")
             slippage_bps = Decimal("0")
@@ -125,7 +131,7 @@ class OrderBookAnalyzer:
 
         return qty_sum
 
-    def imbalance(self, levels: int = 10) -> float:
+    def imbalance(self, levels: int = 10) -> Decimal:
         """
         Order book imbalance ratio.
         Returns [-1.0, +1.0] where:
@@ -137,10 +143,10 @@ class OrderBookAnalyzer:
 
         total_qty = bid_qty + ask_qty
         if total_qty == Decimal("0"):
-            return 0.0
+            return Decimal("0")
 
         imbalance_ratio = (bid_qty - ask_qty) / total_qty
-        return float(imbalance_ratio)
+        return imbalance_ratio
 
     def effective_spread(self, qty: float) -> Decimal:
         """
@@ -156,7 +162,7 @@ class OrderBookAnalyzer:
         sell_fill = self.walk_the_book("sell", qty_dec)
 
         if not buy_fill["fully_filled"] or not sell_fill["fully_filled"]:
-            return Decimal("0")
+            return None
 
         avg_ask_fill = buy_fill["avg_price"]
         avg_bid_fill = sell_fill["avg_price"]

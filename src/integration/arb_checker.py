@@ -2,6 +2,8 @@
 
 import argparse
 import logging
+import csv
+import os
 from datetime import datetime
 from decimal import Decimal
 
@@ -74,11 +76,16 @@ class ArbChecker:
         # 4. Get DEX price
         try:
             # Створюємо фейкові токени для PricingEngine (Week 2 вимагає об'єкти Token)
-            t_base = Token(_MOCK_WETH, base_asset, 18)
+            base_decimals = (
+                18
+                if base_asset in ["ETH", "WETH", "LINK"]
+                else 8 if base_asset in ["WBTC", "BTC"] else 18
+            )
+            t_base = Token(_MOCK_WETH, base_asset, base_decimals)
             t_quote = Token(_MOCK_USDC, quote_asset, 6)
 
-            # Переводимо trade_size в wei (припускаємо 18 decimals для базового активу)
-            trade_size_wei = int(trade_size * (Decimal("10") ** 18))
+            # Переводимо trade_size в wei (використовуючи t_base.decimals)
+            trade_size_wei = int(trade_size * (Decimal("10") ** t_base.decimals))
             gas_price_gwei = 20
 
             # Scenario 1: Buy DEX (give USDT, get ETH) -> Check how much USDT we need to pay for `trade_size` ETH
@@ -110,11 +117,14 @@ class ArbChecker:
 
             dex_fee_bps = Decimal("30.0")
             dex_price_impact_bps = Decimal("1.2")
+            eth_price_usd = (
+                dex_bid if base_asset in ["ETH", "WETH"] else Decimal("2000.0")
+            )
             gas_cost_usd = (
                 Decimal(dex_buy_quote.gas_estimate)
                 * Decimal("20")
                 * Decimal("1e-9")
-                * dex_bid
+                * eth_price_usd
             )
         except Exception as e:
             logger.warning(
@@ -161,6 +171,8 @@ class ArbChecker:
             sell_asset = base_asset
             sell_amount = trade_size
             cex_slippage_bps = cex_sell_info["slippage_bps"]
+            buy_fee = buy_amount * (dex_fee_bps / Decimal("10000"))
+            sell_fee = sell_amount * (cex_fee_bps / Decimal("10000"))
         elif gap_2 >= gap_1 and gap_2 > Decimal("0"):
             direction = "buy_cex_sell_dex"
             gap_bps = gap_2_bps
@@ -173,6 +185,8 @@ class ArbChecker:
             sell_asset = base_asset
             sell_amount = trade_size
             cex_slippage_bps = cex_buy_info["slippage_bps"]
+            buy_fee = buy_amount * (cex_fee_bps / Decimal("10000"))
+            sell_fee = sell_amount * (dex_fee_bps / Decimal("10000"))
         else:
             direction = None
             gap_bps = Decimal("0")
@@ -180,6 +194,8 @@ class ArbChecker:
             dex_price = dex_ask
             buy_venue = None
             cex_slippage_bps = Decimal("0")
+            buy_fee = Decimal("0")
+            sell_fee = Decimal("0")
 
         # Calculate costs
         estimated_costs_bps = (
@@ -206,6 +222,8 @@ class ArbChecker:
                 sell_venue=sell_venue,
                 sell_asset=sell_asset,
                 sell_amount=sell_amount,
+                buy_fee=buy_fee,
+                sell_fee=sell_fee,
             )
             inventory_ok = exec_check.get("can_execute", False)
 
@@ -213,7 +231,7 @@ class ArbChecker:
             direction and estimated_net_pnl_bps > Decimal("0") and inventory_ok
         )
 
-        return {
+        final_result = {
             "pair": pair,
             "timestamp": datetime.now(),
             "dex_price": dex_price,
@@ -237,6 +255,10 @@ class ArbChecker:
             },
         }
 
+        self._log_opportunity(final_result)
+
+        return final_result
+
     def _empty_result(self, pair: str) -> dict:
         return {
             "pair": pair,
@@ -251,8 +273,27 @@ class ArbChecker:
             "inventory_ok": False,
             "executable": False,
             "details": {},
-            "gap_usd": Decimal("0"),
         }
+
+    def _log_opportunity(self, result: dict, filepath: str = "arb_opportunities.csv"):
+        """Stretch Goal: Logs every checked opportunity to a CSV file."""
+        file_exists = os.path.isfile(filepath)
+
+        with open(filepath, mode="a", newline="") as f:
+            row = {
+                "timestamp": result["timestamp"].isoformat(),
+                "pair": result["pair"],
+                "direction": str(result["direction"]),
+                "gap_bps": str(result["gap_bps"]),
+                "costs_bps": str(result["estimated_costs_bps"]),
+                "net_pnl_bps": str(result["estimated_net_pnl_bps"]),
+                "inventory_ok": str(result["inventory_ok"]),
+                "executable": str(result["executable"]),
+            }
+            writer = csv.DictWriter(f, fieldnames=row.keys())
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(row)
 
 
 if __name__ == "__main__":
@@ -356,4 +397,55 @@ if __name__ == "__main__":
         print("Verdict: EXECUTE — profitable gap found")
     else:
         print("Verdict: SKIP — costs exceed gap or missing inventory")
+    print("═══════════════════════════════════════════\n")
+
+    # ---------------------------------------------------------
+    # STRETCH GOAL DEMO: PnL Chart Generation
+    # ---------------------------------------------------------
+    from src.inventory.pnl import ArbRecord, TradeLeg
+    from datetime import timedelta
+
+    print("Generating Historical PnL Chart (Stretch Goal)...")
+    # Додаємо кілька фейкових угод для графіку
+    base_time = datetime.now() - timedelta(hours=5)
+
+    mock_trades = [
+        (base_time, Decimal("10.5")),
+        (base_time + timedelta(hours=1), Decimal("5.2")),
+        (base_time + timedelta(hours=2), Decimal("-3.1")),
+        (base_time + timedelta(hours=3), Decimal("8.4")),
+        (base_time + timedelta(hours=4), Decimal("12.0")),
+    ]
+
+    for i, (t_time, net) in enumerate(mock_trades):
+        # Робимо фейкову угоду суто для того, щоб PnL Engine мав що малювати
+        buy = TradeLeg(
+            str(i),
+            t_time,
+            Venue.BINANCE,
+            "ETH/USDT",
+            "buy",
+            Decimal("1"),
+            Decimal("2000"),
+            Decimal("1"),
+            "USDT",
+            Decimal("1"),
+        )
+        sell = TradeLeg(
+            str(i),
+            t_time,
+            Venue.WALLET,
+            "ETH/USDT",
+            "sell",
+            Decimal("1"),
+            Decimal("2000") + net,
+            Decimal("0"),
+            "USDT",
+            Decimal("0"),
+        )
+        record = ArbRecord(str(i), t_time, buy, sell, Decimal("0"))
+        checker.pnl_engine.record(record)
+
+    checker.pnl_engine.export_chart("demo_pnl_chart.png")
+    print("✅ Chart saved as 'demo_pnl_chart.png'")
     print("═══════════════════════════════════════════\n")

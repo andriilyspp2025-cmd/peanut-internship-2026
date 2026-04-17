@@ -124,6 +124,8 @@ class InventoryTracker:
         sell_venue: Venue,
         sell_asset: str,  # What you're selling (e.g., "ETH")
         sell_amount: Decimal,  # How much you're selling
+        buy_fee: Decimal = Decimal("0"),  # Estimated fee to be paid
+        sell_fee: Decimal = Decimal("0"),  # Estimated fee to be paid
     ) -> dict:
         """
         Pre-flight check: can we execute both legs of an arb?
@@ -140,31 +142,36 @@ class InventoryTracker:
         """
         buy_available = self.get_available(buy_venue, buy_asset)
         sell_available = self.get_available(sell_venue, sell_asset)
-        if buy_available < buy_amount:
+
+        # Комісії зазвичай вираховуються з отриманої суми, тому для старту потрібен лише amount
+        buy_needed = buy_amount
+        sell_needed = sell_amount
+
+        if buy_available < buy_needed:
             return {
                 "can_execute": False,
                 "buy_venue_available": buy_available,
-                "buy_venue_needed": buy_amount,
+                "buy_venue_needed": buy_needed,
                 "sell_venue_available": sell_available,
-                "sell_venue_needed": sell_amount,
-                "reason": f"Not enough {buy_asset} on {buy_venue}",
+                "sell_venue_needed": sell_needed,
+                "reason": f"Not enough {buy_asset} on {buy_venue} (needed {buy_needed})",
             }
-        if sell_available < sell_amount:
+        if sell_available < sell_needed:
             return {
                 "can_execute": False,
                 "buy_venue_available": buy_available,
-                "buy_venue_needed": buy_amount,
+                "buy_venue_needed": buy_needed,
                 "sell_venue_available": sell_available,
-                "sell_venue_needed": sell_amount,
-                "reason": f"Not enough {sell_asset} on {sell_venue}",
+                "sell_venue_needed": sell_needed,
+                "reason": f"Not enough {sell_asset} on {sell_venue} (needed {sell_needed})",
             }
 
         return {
             "can_execute": True,
             "buy_venue_available": buy_available,
-            "buy_venue_needed": buy_amount,
+            "buy_venue_needed": buy_needed,
             "sell_venue_available": sell_available,
-            "sell_venue_needed": sell_amount,
+            "sell_venue_needed": sell_needed,
             "reason": None,
         }
 
@@ -204,7 +211,7 @@ class InventoryTracker:
             raise ValueError("side must be 'buy' or 'sell'")
         update_balance(fee_asset, -fee)
 
-    def skew(self, asset: str) -> dict:
+    def skew(self, asset: str, target_ratio: dict[Venue, float] = None) -> dict:
         """
         Calculate distribution skew for an asset across venues.
 
@@ -220,6 +227,8 @@ class InventoryTracker:
             'needs_rebalance': bool,  # True if max_deviation > 30%
         }
         """
+        target_ratio = target_ratio or {Venue.BINANCE: 0.5, Venue.WALLET: 0.5}
+
         asset_total = sum(
             self.balances[venue].get(asset, Balance(venue, asset, Decimal("0"))).total
             for venue in self.balances
@@ -247,8 +256,20 @@ class InventoryTracker:
             .total
             / asset_total
         )
-        deviation_binance = abs(binance_pct - Decimal("0.5")) / Decimal("0.5") * 100
-        deviation_wallet = abs(wallet_pct - Decimal("0.5")) / Decimal("0.5") * 100
+
+        target_binance = Decimal(str(target_ratio.get(Venue.BINANCE, 0.5)))
+        target_wallet = Decimal(str(target_ratio.get(Venue.WALLET, 0.5)))
+
+        deviation_binance = (
+            abs(binance_pct - target_binance) / target_binance * 100
+            if target_binance > Decimal("0")
+            else Decimal("0")
+        )
+        deviation_wallet = (
+            abs(wallet_pct - target_wallet) / target_wallet * 100
+            if target_wallet > Decimal("0")
+            else Decimal("0")
+        )
         max_deviation = max(deviation_binance, deviation_wallet)
         if max_deviation > rebalance_threshold_pct:
             needs_rebalance = True
@@ -283,7 +304,7 @@ class InventoryTracker:
             "needs_rebalance": needs_rebalance,
         }
 
-    def get_skews(self) -> list[dict]:
+    def get_skews(self, target_ratio: dict[Venue, float] = None) -> list[dict]:
         """
         Check skew for ALL tracked assets.
         Iterates every asset across all venues and returns skew info for each.
@@ -305,4 +326,4 @@ class InventoryTracker:
         all_assets = set()
         for assets in self.balances.values():
             all_assets.update(assets.keys())
-        return [self.skew(asset) for asset in all_assets]
+        return [self.skew(asset, target_ratio) for asset in all_assets]

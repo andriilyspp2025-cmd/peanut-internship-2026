@@ -72,7 +72,7 @@ def test_can_execute_fails_insufficient_buy(tracker):
     )
 
     assert result["can_execute"] is False
-    assert result["reason"] == f"Not enough USDT on {Venue.BINANCE}"
+    assert result["reason"] == f"Not enough USDT on {Venue.BINANCE} (needed 1500.0)"
 
 
 def test_record_trade_updates_balances(tracker):
