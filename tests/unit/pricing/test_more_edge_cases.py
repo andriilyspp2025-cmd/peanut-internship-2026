@@ -12,7 +12,6 @@ from src.pricing.router import RouteFinder, Route
 from src.pricing.mempool import MempoolMonitor, ParsedSwap
 from unittest.mock import MagicMock
 
-
 WETH = Token(Address("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"), "WETH", 18)
 USDC = Token(Address("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"), "USDC", 6)
 SHIB = Token(Address("0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"), "SHIB", 18)
@@ -445,10 +444,3 @@ def test_refresh_pool_updates_reserves():
 
     assert engine.pools[addr].reserve0 == 2000
     assert engine.router is not None
-
-
-WETH = Token(Address("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"), "WETH", 18)
-USDC = Token(Address("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"), "USDC", 6)
-SHIB = Token(Address("0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"), "SHIB", 18)
-
-# --- AMM TESTS ---

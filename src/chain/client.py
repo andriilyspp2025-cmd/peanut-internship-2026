@@ -15,7 +15,6 @@ from src.chain.errors import (
     ReplacementUnderpriced,
 )
 
-
 _RPC_ERROR_MAP = [
     ("insufficient funds", InsufficientFunds),
     ("nonce too low", NonceTooLow),
