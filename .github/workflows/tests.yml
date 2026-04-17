@@ -31,4 +31,4 @@ jobs:
       
     - name: Run Tests
       # Assuming you want to capture the test outputs securely
-      run: pytest tests/ -v
+      run: PYTHONPATH=. pytest tests/ -v
