@@ -4,25 +4,6 @@ Welcome to the Peanut Trade Quant Internship (Weeks 1-3) repository. This projec
 
 ---
 
-## 🏗️ Architecture & Flow
-
-Our execution and accounting pipeline orchestrates opportunities across both centralized and decentralized venues. The `ArbChecker` serves as the central integration layer:
-
-```mermaid
-graph TD
-    A[ArbChecker <br/> Integration Layer] -->|1. Get DEX Quote| B(PricingEngine <br/> src/pricing)
-    A -->|2. Fetch CEX Book| C(ExchangeClient <br/> src/exchange)
-    A -->|3. Check Feasibility| D(InventoryTracker <br/> src/inventory)
-    A -->|4. Record Profit| E(PnLEngine <br/> src/inventory)
-    
-    B -.-> B1[AMM Math & DFS Router]
-    B -.-> B2[Mempool Monitor]
-    C -.-> C1[OrderBookAnalyzer <br/> Slippage Math]
-    D -.-> D1[RebalancePlanner]
-```
-
----
-
 ## 🛡️ Key Principles & Features
 
 - **NO FLOATS POLICY**: We strictly use `decimal.Decimal` for all financial mathematics. Floats lose precision; exact deterministic math is required for accounting, slippage calculation, and fee estimation.
