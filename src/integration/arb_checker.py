@@ -382,3 +382,52 @@ if __name__ == "__main__":
     else:
         print("Verdict: SKIP — costs exceed gap or missing inventory")
     print("═══════════════════════════════════════════\n")
+
+    # ---------------------------------------------------------
+    # STRETCH GOAL DEMO: PnL Chart Generation
+    # ---------------------------------------------------------
+    from src.inventory.pnl import ArbRecord, TradeLeg
+    from datetime import timedelta
+
+    print("Generating Historical PnL Chart (Stretch Goal)...")
+    # Додаємо кілька фейкових угод для графіку
+    base_time = datetime.now() - timedelta(hours=5)
+
+    mock_trades = [
+        (base_time, Decimal("10.5")),
+        (base_time + timedelta(hours=1), Decimal("5.2")),
+        (base_time + timedelta(hours=2), Decimal("-3.1")),
+        (base_time + timedelta(hours=3), Decimal("8.4")),
+        (base_time + timedelta(hours=4), Decimal("12.0")),
+    ]
+
+    for i, (t_time, net) in enumerate(mock_trades):
+        # Робимо фейкову угоду суто для того, щоб PnL Engine мав що малювати
+        buy = TradeLeg(
+            str(i),
+            t_time,
+            Venue.BINANCE,
+            "ETH/USDT",
+            "buy",
+            Decimal("1"),
+            Decimal("2000"),
+            Decimal("1"),
+            "USDT",
+        )
+        sell = TradeLeg(
+            str(i),
+            t_time,
+            Venue.WALLET,
+            "ETH/USDT",
+            "sell",
+            Decimal("1"),
+            Decimal("2000") + net,
+            Decimal("0"),
+            "USDT",
+        )
+        record = ArbRecord(str(i), t_time, buy, sell, Decimal("0"))
+        checker.pnl_engine.record(record)
+
+    checker.pnl_engine.export_chart("demo_pnl_chart.png")
+    print("✅ Chart saved as 'demo_pnl_chart.png'")
+    print("═══════════════════════════════════════════\n")

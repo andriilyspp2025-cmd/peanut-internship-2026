@@ -1,4 +1,5 @@
 import csv
+import matplotlib.pyplot as plt
 from decimal import Decimal
 from dataclasses import dataclass
 from datetime import datetime
@@ -206,3 +207,30 @@ class PnLEngine:
             writer.writeheader()
             for trade in self.trades:
                 writer.writerow(self._trade_summary(trade))
+
+    def export_chart(self, filepath: str = "pnl_chart.png"):
+        """Stretch Goal: Export cumulative PnL chart."""
+        if not self.trades:
+            return
+
+        times = [t.timestamp for t in self.trades]
+
+        # Рахуємо накопичувальний (cumulative) PnL
+        cumulative_pnl = []
+        current = Decimal("0")
+        for t in self.trades:
+            current += t.net_pnl
+            cumulative_pnl.append(float(current))
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(
+            times, cumulative_pnl, marker="o", linestyle="-", color="green", linewidth=2
+        )
+        plt.title("Cumulative Net PnL Over Time")
+        plt.xlabel("Time")
+        plt.ylabel("Net PnL (USD)")
+        plt.grid(True, linestyle="--", alpha=0.7)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(filepath)
+        plt.close()
