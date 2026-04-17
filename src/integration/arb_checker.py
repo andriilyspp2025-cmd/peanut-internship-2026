@@ -2,6 +2,8 @@
 
 import argparse
 import logging
+import csv
+import os
 from datetime import datetime
 from decimal import Decimal
 
@@ -213,7 +215,7 @@ class ArbChecker:
             direction and estimated_net_pnl_bps > Decimal("0") and inventory_ok
         )
 
-        return {
+        final_result = {
             "pair": pair,
             "timestamp": datetime.now(),
             "dex_price": dex_price,
@@ -237,6 +239,10 @@ class ArbChecker:
             },
         }
 
+        self._log_opportunity(final_result)
+
+        return final_result
+
     def _empty_result(self, pair: str) -> dict:
         return {
             "pair": pair,
@@ -251,8 +257,27 @@ class ArbChecker:
             "inventory_ok": False,
             "executable": False,
             "details": {},
-            "gap_usd": Decimal("0"),
         }
+
+    def _log_opportunity(self, result: dict, filepath: str = "arb_opportunities.csv"):
+        """Stretch Goal: Logs every checked opportunity to a CSV file."""
+        file_exists = os.path.isfile(filepath)
+
+        with open(filepath, mode="a", newline="") as f:
+            row = {
+                "timestamp": result["timestamp"].isoformat(),
+                "pair": result["pair"],
+                "direction": str(result["direction"]),
+                "gap_bps": str(result["gap_bps"]),
+                "costs_bps": str(result["estimated_costs_bps"]),
+                "net_pnl_bps": str(result["estimated_net_pnl_bps"]),
+                "inventory_ok": str(result["inventory_ok"]),
+                "executable": str(result["executable"]),
+            }
+            writer = csv.DictWriter(f, fieldnames=row.keys())
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(row)
 
 
 if __name__ == "__main__":
