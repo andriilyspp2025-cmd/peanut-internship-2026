@@ -36,7 +36,7 @@ class ForkSimulator:
         }
 
         try:
-            result = self.w3.eth.call(tx)
+            self.w3.eth.call(tx)
             return SimulationResult(
                 success=True, amount_out=0, gas_used=0, error=None, logs=[]
             )
@@ -70,7 +70,7 @@ class ForkSimulator:
         """Compares Python-calculated output against local node simulation."""
         calculated = pair.get_amount_out(amount_in, token_in)
 
-        simulated_result = self.simulate_swap(
+        self.simulate_swap(
             Address("0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"),
             {},
             Address("0x0000000000000000000000000000000000000000"),
