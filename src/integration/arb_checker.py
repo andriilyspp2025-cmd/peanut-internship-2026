@@ -429,6 +429,7 @@ if __name__ == "__main__":
             Decimal("2000"),
             Decimal("1"),
             "USDT",
+            Decimal("1"),
         )
         sell = TradeLeg(
             str(i),
@@ -440,6 +441,7 @@ if __name__ == "__main__":
             Decimal("2000") + net,
             Decimal("0"),
             "USDT",
+            Decimal("0"),
         )
         record = ArbRecord(str(i), t_time, buy, sell, Decimal("0"))
         checker.pnl_engine.record(record)

@@ -108,18 +108,23 @@ class RebalancePlanner:
         if amount_to_transfer <= Decimal("0"):
             return []
 
-        fee_info = TRANSFER_FEES.get(
-            asset, {"fee": Decimal("0"), "min_withdrawal": Decimal("0"), "time_min": 5}
-        )
-        estimated_fee = fee_info["fee"]
-        min_withdrawal = fee_info["min_withdrawal"]
-        estimated_time_min = fee_info["time_min"]
+        if from_venue == Venue.BINANCE:
+            fee_info = TRANSFER_FEES.get(
+                asset,
+                {"fee": Decimal("0"), "min_withdrawal": Decimal("0"), "time_min": 5},
+            )
+            estimated_fee = fee_info["fee"]
+            min_withdrawal = fee_info["min_withdrawal"]
+            estimated_time_min = fee_info["time_min"]
 
-        if estimated_fee >= amount_to_transfer:
-            return []
-
-        if amount_to_transfer < min_withdrawal:
-            return []
+            if estimated_fee >= amount_to_transfer:
+                return []
+            if amount_to_transfer < min_withdrawal:
+                return []
+        else:
+            # WALLET -> BINANCE: Fee is paid in ETH for gas, not taken from the asset
+            estimated_fee = Decimal("0")  # fee in asset is 0
+            estimated_time_min = 15
 
         donor_balance = (
             current_binance if from_venue == Venue.BINANCE else current_wallet

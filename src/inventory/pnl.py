@@ -20,6 +20,7 @@ class TradeLeg:
     price: Decimal  # Execution price
     fee: Decimal
     fee_asset: str
+    fee_usd: Decimal = Decimal("0")  # Fee converted to USD
 
 
 @dataclass
@@ -42,7 +43,7 @@ class ArbRecord:
     @property
     def total_fees(self) -> Decimal:
         """All fees: both legs + gas."""
-        return self.buy_leg.fee + self.sell_leg.fee + self.gas_cost_usd
+        return self.buy_leg.fee_usd + self.sell_leg.fee_usd + self.gas_cost_usd
 
     @property
     def net_pnl(self) -> Decimal:
@@ -170,11 +171,13 @@ class PnLEngine:
             "sell_price": str(trade.sell_leg.price),
             "sell_fee": str(trade.sell_leg.fee),
             "sell_fee_asset": trade.sell_leg.fee_asset,
+            "sell_fee_usd": str(trade.sell_leg.fee_usd),
             "gas_cost_usd": str(trade.gas_cost_usd),
             "gross_pnl_usd": str(trade.gross_pnl),
             "total_fees_usd": str(trade.total_fees),
             "net_pnl_usd": str(trade.net_pnl),
             "net_pnl_bps": str(trade.net_pnl_bps),
+            "buy_fee_usd": str(trade.buy_leg.fee_usd),
         }
 
     def export_csv(self, filepath: str):
@@ -190,6 +193,7 @@ class PnLEngine:
                 "buy_price",
                 "buy_fee",
                 "buy_fee_asset",
+                "buy_fee_usd",
                 "sell_venue",
                 "sell_symbol",
                 "sell_side",
@@ -197,6 +201,7 @@ class PnLEngine:
                 "sell_price",
                 "sell_fee",
                 "sell_fee_asset",
+                "sell_fee_usd",
                 "gas_cost_usd",
                 "gross_pnl_usd",
                 "total_fees_usd",

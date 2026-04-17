@@ -143,8 +143,9 @@ class InventoryTracker:
         buy_available = self.get_available(buy_venue, buy_asset)
         sell_available = self.get_available(sell_venue, sell_asset)
 
-        buy_needed = buy_amount + buy_fee
-        sell_needed = sell_amount + sell_fee
+        # Комісії зазвичай вираховуються з отриманої суми, тому для старту потрібен лише amount
+        buy_needed = buy_amount
+        sell_needed = sell_amount
 
         if buy_available < buy_needed:
             return {
