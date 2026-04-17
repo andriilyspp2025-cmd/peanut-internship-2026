@@ -62,7 +62,7 @@ class RebalancePlanner:
         """
         return [
             skew_data
-            for skew_data in self.tracker.get_skews()
+            for skew_data in self.tracker.get_skews(target_ratio=self.target_ratio)
             if skew_data["needs_rebalance"]
         ]
 
@@ -79,7 +79,7 @@ class RebalancePlanner:
         Returns list of TransferPlan objects.
         Empty list if no rebalance needed.
         """
-        skew_info = self.tracker.skew(asset)
+        skew_info = self.tracker.skew(asset, target_ratio=self.target_ratio)
         if not skew_info["needs_rebalance"]:
             return []
         total = skew_info["total"]

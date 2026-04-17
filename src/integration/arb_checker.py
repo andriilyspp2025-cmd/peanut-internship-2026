@@ -76,11 +76,16 @@ class ArbChecker:
         # 4. Get DEX price
         try:
             # Створюємо фейкові токени для PricingEngine (Week 2 вимагає об'єкти Token)
-            t_base = Token(_MOCK_WETH, base_asset, 18)
+            base_decimals = (
+                18
+                if base_asset in ["ETH", "WETH", "LINK"]
+                else 8 if base_asset in ["WBTC", "BTC"] else 18
+            )
+            t_base = Token(_MOCK_WETH, base_asset, base_decimals)
             t_quote = Token(_MOCK_USDC, quote_asset, 6)
 
-            # Переводимо trade_size в wei (припускаємо 18 decimals для базового активу)
-            trade_size_wei = int(trade_size * (Decimal("10") ** 18))
+            # Переводимо trade_size в wei (використовуючи t_base.decimals)
+            trade_size_wei = int(trade_size * (Decimal("10") ** t_base.decimals))
             gas_price_gwei = 20
 
             # Scenario 1: Buy DEX (give USDT, get ETH) -> Check how much USDT we need to pay for `trade_size` ETH
@@ -112,11 +117,14 @@ class ArbChecker:
 
             dex_fee_bps = Decimal("30.0")
             dex_price_impact_bps = Decimal("1.2")
+            eth_price_usd = (
+                dex_bid if base_asset in ["ETH", "WETH"] else Decimal("2000.0")
+            )
             gas_cost_usd = (
                 Decimal(dex_buy_quote.gas_estimate)
                 * Decimal("20")
                 * Decimal("1e-9")
-                * dex_bid
+                * eth_price_usd
             )
         except Exception as e:
             logger.warning(
@@ -163,6 +171,8 @@ class ArbChecker:
             sell_asset = base_asset
             sell_amount = trade_size
             cex_slippage_bps = cex_sell_info["slippage_bps"]
+            buy_fee = buy_amount * (dex_fee_bps / Decimal("10000"))
+            sell_fee = sell_amount * (cex_fee_bps / Decimal("10000"))
         elif gap_2 >= gap_1 and gap_2 > Decimal("0"):
             direction = "buy_cex_sell_dex"
             gap_bps = gap_2_bps
@@ -175,6 +185,8 @@ class ArbChecker:
             sell_asset = base_asset
             sell_amount = trade_size
             cex_slippage_bps = cex_buy_info["slippage_bps"]
+            buy_fee = buy_amount * (cex_fee_bps / Decimal("10000"))
+            sell_fee = sell_amount * (dex_fee_bps / Decimal("10000"))
         else:
             direction = None
             gap_bps = Decimal("0")
@@ -182,6 +194,8 @@ class ArbChecker:
             dex_price = dex_ask
             buy_venue = None
             cex_slippage_bps = Decimal("0")
+            buy_fee = Decimal("0")
+            sell_fee = Decimal("0")
 
         # Calculate costs
         estimated_costs_bps = (
@@ -208,6 +222,8 @@ class ArbChecker:
                 sell_venue=sell_venue,
                 sell_asset=sell_asset,
                 sell_amount=sell_amount,
+                buy_fee=buy_fee,
+                sell_fee=sell_fee,
             )
             inventory_ok = exec_check.get("can_execute", False)
 

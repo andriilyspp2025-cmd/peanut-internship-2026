@@ -3,7 +3,7 @@ from decimal import Decimal
 from unittest.mock import MagicMock
 
 from src.inventory.tracker import Venue, InventoryTracker
-from src.inventory.rebalencer import RebalancePlanner, TransferPlan
+from src.inventory.rebalancer import RebalancePlanner, TransferPlan
 
 
 @pytest.fixture
