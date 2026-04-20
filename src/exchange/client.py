@@ -1,4 +1,5 @@
 import logging
+import time
 import ccxt
 from decimal import Decimal
 from typing import Dict
@@ -47,9 +48,9 @@ class ExchangeClient:
                 )
                 if used_weight and int(used_weight) > 5000:
                     logger.warning(
-                        f"⚠️ Увага! Вага досягла {used_weight}/6000. Скоро бан!"
+                        f"⚠️ Увага! Вага досягла {used_weight}/6000. Пауза 10 сек!"
                     )
-                    # TODO: add asyncio.sleep(10) or similar here
+                    time.sleep(10)
 
             return raw_ob
         except ccxt.RateLimitExceeded as e:
