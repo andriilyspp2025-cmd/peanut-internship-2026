@@ -23,6 +23,8 @@ class ExchangeClient:
         Initialize with config dict containing apiKey, secret, sandbox flag.
         Must validate connection on init (fetch server time or status).
         """
+        config = config.copy()
+        config["enableRateLimit"] = True
         self.exchange = ccxt.binance(config)
         try:
             self.exchange.load_markets()
@@ -31,13 +33,44 @@ class ExchangeClient:
             logger.critical(f"Failed to connect to Binance Testnet: {e}")
             raise
 
-    def fetch_order_book(self, symbol: str, limit: int = 20) -> dict:
+    def safe_fetch_order_book(self, symbol: str, limit: int = 20):
         """
-        Fetch L2 order book snapshot.
+        Safe wrapper for fetching L2 order book.
+        Reads Binance rate limits from X-MBX-USED-WEIGHT-1M header.
         """
         try:
             raw_ob = self.exchange.fetch_order_book(symbol, limit)
 
+            if self.exchange.last_response_headers:
+                used_weight = self.exchange.last_response_headers.get(
+                    "x-mbx-used-weight-1m"
+                )
+                if used_weight and int(used_weight) > 5000:
+                    logger.warning(
+                        f"⚠️ Увага! Вага досягла {used_weight}/6000. Скоро бан!"
+                    )
+                    # TODO: add asyncio.sleep(10) or similar here
+
+            return raw_ob
+        except ccxt.RateLimitExceeded as e:
+            logger.error(f"❌ Rate Limit Exceeded: {e}")
+            return None
+        except ccxt.NetworkError as e:
+            logger.error(f"🔌 Проблема з мережею (NetworkError): {e}")
+            return None
+        except Exception as e:
+            logger.error(f"🛑 Невідома помилка при fetch_order_book: {e}")
+            return None
+
+    def fetch_order_book(self, symbol: str, limit: int = 20) -> dict:
+        """
+        Fetch L2 order book snapshot using safe_fetch_order_book.
+        """
+        raw_ob = self.safe_fetch_order_book(symbol, limit)
+        if not raw_ob:
+            raise InsufficientLiquidityError(f"Could not fetch orderbook for {symbol}")
+
+        try:
             if not raw_ob.get("bids") or not raw_ob.get("asks"):
                 raise InsufficientLiquidityError("Empty orderbook from CEX")
 
@@ -66,11 +99,8 @@ class ExchangeClient:
                 "mid_price": mid_price,
                 "spread_bps": spread_bps,
             }
-        except ccxt.NetworkError as e:
-            logger.error(f"Network error fetching order book for {symbol}: {e}")
-            raise
         except ccxt.ExchangeError as e:
-            logger.error(f"Exchange error fetching order book for {symbol}: {e}")
+            logger.error(f"Exchange error processing order book for {symbol}: {e}")
             raise
 
     def fetch_balance(self) -> dict[str, dict]:
