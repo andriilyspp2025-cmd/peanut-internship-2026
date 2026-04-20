@@ -34,10 +34,9 @@ class ExchangeClient:
             logger.critical(f"Failed to connect to Binance Testnet: {e}")
             raise
 
-    def safe_fetch_order_book(self, symbol: str, limit: int = 20):
+    def _safe_fetch_order_book(self, symbol: str, limit: int = 20) -> dict | None:
         """
-        Safe wrapper for fetching L2 order book.
-        Reads Binance rate limits from X-MBX-USED-WEIGHT-1M header.
+        Internal helper: Fetches raw L2 order book and handles rate limits.
         """
         try:
             raw_ob = self.exchange.fetch_order_book(symbol, limit)
@@ -48,26 +47,28 @@ class ExchangeClient:
                 )
                 if used_weight and int(used_weight) > 5000:
                     logger.warning(
-                        f"⚠️ Увага! Вага досягла {used_weight}/6000. Пауза 10 сек!"
+                        f"Attention! The weight has reached {used_weight}/6000. 10-second pause!"
                     )
                     time.sleep(10)
 
             return raw_ob
         except ccxt.RateLimitExceeded as e:
-            logger.error(f"❌ Rate Limit Exceeded: {e}")
+            logger.error(f" Rate Limit Exceeded: {e}")
             return None
         except ccxt.NetworkError as e:
-            logger.error(f"🔌 Проблема з мережею (NetworkError): {e}")
+            logger.error(f"Network issue  (NetworkError): {e}")
             return None
         except Exception as e:
-            logger.error(f"🛑 Невідома помилка при fetch_order_book: {e}")
+            logger.error(
+                f" Unknown error occurred while fetching order book for {symbol}: {e}"
+            )
             return None
 
     def fetch_order_book(self, symbol: str, limit: int = 20) -> dict:
         """
-        Fetch L2 order book snapshot using safe_fetch_order_book.
+        Public API: Fetches L2 order book and normalizes to Decimal format.
         """
-        raw_ob = self.safe_fetch_order_book(symbol, limit)
+        raw_ob = self._safe_fetch_order_book(symbol, limit)
         if not raw_ob:
             raise InsufficientLiquidityError(f"Could not fetch orderbook for {symbol}")
 
