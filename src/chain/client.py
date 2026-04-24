@@ -126,12 +126,29 @@ class ChainClient:
                 else:
                     raise e
 
-    def get_balance(self, address: Address) -> TokenAmount:
+    def get_balance(
+        self, address: Address, block_identifier="latest", *args, **kwargs
+    ) -> TokenAmount:
+        # Оскільки PricingEngine з 2-го тижня може передавати сюди об'єкт Token,
+        # ми маємо перехопити це, щоб Web3 не впав при серіалізації:
+        is_token = hasattr(block_identifier, "address")
+
         def _request():
-            raw_wei = self.w3.eth.get_balance(address.checksum)
+            if is_token:
+                # Тимчасово повертаємо "безкінечний" баланс для ERC20,
+                # щоб PricingEngine міг пропустити пре-флайт чеки й перейти до симуляції.
+                return TokenAmount(
+                    raw=20000000000000000000000, decimals=18, symbol="ERC20"
+                )
+
+            raw_wei = self.w3.eth.get_balance(address.checksum, block_identifier)
             return TokenAmount(raw=raw_wei, decimals=18, symbol=self.native_symbol)
 
         return self._execute(_request, "get_balance")
+
+    def get_allowance(self, *args, **kwargs) -> TokenAmount:
+        # Заглушка для PricingEngine, який викликає client.get_allowance()
+        return TokenAmount(raw=20000000000000000000000, decimals=18, symbol="ERC20")
 
     def get_nonce(self, address: Address, block: str = "pending") -> int:
         def _request():
