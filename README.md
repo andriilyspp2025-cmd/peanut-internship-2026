@@ -1,4 +1,3 @@
-````markdown
 # Peanut Trade Quant Internship - HFT Arbitrage Bot
 
 This repository contains the final project of the Peanut Trade Quant Internship.
