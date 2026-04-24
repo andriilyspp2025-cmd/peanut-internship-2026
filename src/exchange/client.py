@@ -26,6 +26,12 @@ class ExchangeClient:
         """
         config = config.copy()
         config["enableRateLimit"] = True
+
+        config["verbose"] = False
+
+        for key in ["pairs", "dex_pools", "trade_size", "simulation", "signal_config"]:
+            config.pop(key, None)
+
         self.exchange = ccxt.binance(config)
         try:
             self.exchange.load_markets()

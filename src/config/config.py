@@ -14,6 +14,7 @@ class Settings:
 
     # --- Blockchain / DEX ---
     RPC_URL: str = os.getenv("RPC_URL", "http://127.0.0.1:8545")
+    FORK_URL: str = os.getenv("ETH_RPC_URL", "")
 
     # --- Binance Testnet (CEX) ---
     BINANCE_API_KEY: str = os.getenv("BINANCE_TESTNET_API_KEY", "")
