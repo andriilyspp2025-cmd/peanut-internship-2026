@@ -213,13 +213,42 @@ class ArbBot:
         if self.running:
             await self._sync_balances()
 
-        while self.running:
+        if self.is_test_mode or not self.pricing_engine:
+            # Fallback to polling for test mode
+            while self.running:
+                try:
+                    await self._tick()
+                    await asyncio.sleep(1)
+                except Exception as e:
+                    logger.error(f"Tick error: {e}")
+                    await asyncio.sleep(5)
+        else:
+            # Production: WebSocket subscription replaces the polling loop
+            if not self.pricing_engine.monitor:
+                from src.pricing.mempool import MempoolMonitor
+
+                ws_url = getattr(app_config, "WSS_URL", "wss://eth.merkle.io")
+                self.pricing_engine.monitor = MempoolMonitor(ws_url)
+
+            async def on_price_update(pool_addr):
+                try:
+                    await self._tick()
+                except Exception as e:
+                    logger.error(f"WS Tick error: {e}")
+
+            self.pricing_engine.monitor.callback = on_price_update
+
+            logger.info("📡 Starting WebSocket price feed...")
             try:
-                await self._tick()
-                await asyncio.sleep(1)
+                pool_addrs = [
+                    p.checksum if hasattr(p, "checksum") else str(p)
+                    for p in self.dex_pools
+                ]
+                # This blocks as long as the subscription is active
+                await self.pricing_engine.monitor.start_price_feed(pool_addrs)
             except Exception as e:
-                logger.error(f"Tick error: {e}")
-                await asyncio.sleep(5)
+                logger.error(f"WSS disconnected or failed: {e}")
+                self.running = False
 
     async def _tick(self):
         if self.executor.circuit_breaker.is_open():
@@ -227,7 +256,12 @@ class ArbBot:
             return
 
         for pair in self.pairs:
-            signal = self.generator.generate(pair, self.trade_size)
+            # FIX: Prevent blocking the asyncio event loop with synchronous calls (e.g. fetch_order_book)
+            loop = asyncio.get_event_loop()
+            signal = await loop.run_in_executor(
+                None, self.generator.generate, pair, self.trade_size
+            )
+
             if signal is None:
                 if self.verbose:
                     logger.info(

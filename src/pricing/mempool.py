@@ -207,5 +207,10 @@ class MempoolMonitor:
                     log.info(
                         f"PRICE FEED UPDATE: Pool {pool_address} reserves changed - reserve0: {reserve0}, reserve1: {reserve1}"
                     )
+                    if self.callback:
+                        if asyncio.iscoroutinefunction(self.callback):
+                            asyncio.create_task(self.callback(pool_address))
+                        else:
+                            self.callback(pool_address)
             except Exception as e:
                 log.debug(f"Error processing price feed event: {e}")
