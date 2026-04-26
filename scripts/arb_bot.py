@@ -107,6 +107,7 @@ class ArbBot:
         self.wallet_address = Address(addr_str) if addr_str else None
 
         self.running = False
+        self._tick_lock = asyncio.Lock()
 
     async def _sync_balances(self):
         """Sync balances from both CEX and on-chain wallet."""
@@ -251,49 +252,55 @@ class ArbBot:
                 self.running = False
 
     async def _tick(self):
-        if self.executor.circuit_breaker.is_open():
-            logger.info("Circuit breaker open")
+        if self._tick_lock.locked():
             return
 
-        for pair in self.pairs:
-            # FIX: Prevent blocking the asyncio event loop with synchronous calls (e.g. fetch_order_book)
-            loop = asyncio.get_event_loop()
-            signal = await loop.run_in_executor(
-                None, self.generator.generate, pair, self.trade_size
-            )
+        async with self._tick_lock:
+            if self.executor.circuit_breaker.is_open():
+                logger.info("Circuit breaker open")
+                return
 
-            if signal is None:
-                if self.verbose:
-                    logger.info(
-                        f"🔕 {pair}: No profitable spread found (Ignored by Generator)"
-                    )
-                continue
+            for pair in self.pairs:
+                # FIX: Prevent blocking the asyncio event loop with synchronous calls (e.g. fetch_order_book)
+                loop = asyncio.get_event_loop()
+                signal = await loop.run_in_executor(
+                    None, self.generator.generate, pair, self.trade_size
+                )
 
-            signal.score = float(self.scorer.score(signal, self.inventory.get_skews()))
+                if signal is None:
+                    if self.verbose:
+                        logger.info(
+                            f"🔕 {pair}: No profitable spread found (Ignored by Generator)"
+                        )
+                    continue
 
-            if signal.score < 60.0:
-                if self.verbose:
-                    logger.info(
-                        f"📉 {pair}: Spread={signal.spread_bps:.1f} bps | Score={signal.score:.1f} -> REJECTED (Score too low)"
-                    )
-                continue
+                signal.score = float(
+                    self.scorer.score(signal, self.inventory.get_skews())
+                )
 
-            logger.info(
-                f"🚀 ACTIONABLE SIGNAL: {pair} spread={signal.spread_bps:.1f}bps score={signal.score}"
-            )
+                if signal.score < 60.0:
+                    if self.verbose:
+                        logger.info(
+                            f"📉 {pair}: Spread={signal.spread_bps:.1f} bps | Score={signal.score:.1f} -> REJECTED (Score too low)"
+                        )
+                    continue
 
-            ctx = await self.executor.execute(signal)
+                logger.info(
+                    f"🚀 ACTIONABLE SIGNAL: {pair} spread={signal.spread_bps:.1f}bps score={signal.score}"
+                )
 
-            self.scorer.record_result(pair, ctx.state == ExecutorState.DONE)
+                ctx = await self.executor.execute(signal)
 
-            if ctx.state == ExecutorState.DONE and ctx.actual_net_pnl is not None:
-                arb_record = execution_to_arb_record(ctx)
-                self.pnl_engine.record(arb_record)
-                logger.info(f"SUCCESS: PnL=${ctx.actual_net_pnl:.2f}")
-            else:
-                logger.warning(f"FAILED: {ctx.error}")
+                self.scorer.record_result(pair, ctx.state == ExecutorState.DONE)
 
-            await self._sync_balances()
+                if ctx.state == ExecutorState.DONE and ctx.actual_net_pnl is not None:
+                    arb_record = execution_to_arb_record(ctx)
+                    self.pnl_engine.record(arb_record)
+                    logger.info(f"SUCCESS: PnL=${ctx.actual_net_pnl:.2f}")
+                else:
+                    logger.warning(f"FAILED: {ctx.error}")
+
+                await self._sync_balances()
 
     def stop(self):
         self.running = False
