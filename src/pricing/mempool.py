@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import ssl
 from dataclasses import dataclass
 from typing import Callable
 from web3 import AsyncWeb3, WebSocketProvider
@@ -47,13 +48,32 @@ class MempoolMonitor:
         callback: Callable[[ParsedSwap], None] = None,
         router_address: str = UNISWAP_V2_ROUTER,
     ):
-        self.w3 = AsyncWeb3(WebSocketProvider(wss_url))
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+
+        self.w3 = AsyncWeb3(
+            WebSocketProvider(
+                wss_url,
+                websocket_kwargs={
+                    "ping_interval": None,
+                    "ping_timeout": None,
+                    "max_size": None,
+                    "ssl": ssl_context,
+                },
+            )
+        )
         self.callback = callback
 
     async def start_listening(self):
         """Connects to WSS and streams pending transactions."""
-        if not await self.w3.is_connected():
-            raise ConnectionError("Failed to connect to WSS provider")
+        try:
+            if not await self.w3.is_connected():
+                raise ConnectionError(
+                    f"Failed to connect to WSS provider: {self.w3.provider.endpoint_uri}"
+                )
+        except Exception as e:
+            raise Exception(f"REAL WSS ERROR: {type(e).__name__} - {str(e)}")
 
         log.info("Connected to WSS. Listening to mempool...")
         await self.w3.eth.subscribe("pending_transactions")
@@ -164,8 +184,13 @@ class MempoolMonitor:
 
     async def start_price_feed(self, pool_addresses: list[str]):
         """Listens for Sync events on specified pools to track reserve updates in real-time."""
-        if not await self.w3.is_connected():
-            raise ConnectionError("Failed to connect to WSS provider")
+        try:
+            if not await self.w3.is_connected():
+                raise ConnectionError(
+                    f"Failed to connect to WSS provider: {self.w3.provider.endpoint_uri}"
+                )
+        except Exception as e:
+            raise Exception(f"REAL WSS ERROR: {type(e).__name__} - {str(e)}")
 
         log.info(f"Subscribing to Sync events for {len(pool_addresses)} pools...")
 

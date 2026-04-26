@@ -22,6 +22,7 @@ class Settings:
 
     # --- System Params ---
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+    WSS_URL: str = os.getenv("WSS_URL", "")
 
     @property
     def binance_config(self) -> dict:
