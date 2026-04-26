@@ -107,6 +107,7 @@ class ArbBot:
         self.wallet_address = Address(addr_str) if addr_str else None
 
         self.running = False
+        self._tick_lock = asyncio.Lock()
 
     async def _sync_balances(self):
         """Sync balances from both CEX and on-chain wallet."""
@@ -165,9 +166,9 @@ class ArbBot:
 
             fallback_rpcs = [
                 app_config.RPC_URL,
-                "https://eth.merkle.io",
                 "https://rpc.mevblocker.io",
                 "https://ethereum-rpc.publicnode.com",
+                "https://eth.merkle.io",
             ]
 
             while not pools_loaded and self.running:
@@ -213,53 +214,152 @@ class ArbBot:
         if self.running:
             await self._sync_balances()
 
-        while self.running:
-            try:
-                await self._tick()
-                await asyncio.sleep(1)
-            except Exception as e:
-                logger.error(f"Tick error: {e}")
-                await asyncio.sleep(5)
+        wss_active = False
+
+        if not self.is_test_mode and self.pricing_engine:
+            fallback_wss = [
+                getattr(app_config, "WSS_URL", None),
+                "wss://eth-mainnet.g.alchemy.com/v2/jxDSx087keRFn7BxxVeoV",
+                "wss://eth.drpc.org",
+                "wss://rpc.ankr.com/eth",
+                "wss://1rpc.io/eth",
+                "wss://llamarpc.com",
+            ]
+
+            fallback_wss = [ws for ws in fallback_wss if ws]
+
+            from src.pricing.mempool import MempoolMonitor
+
+            for ws_url in fallback_wss:
+                if not self.running:
+                    break
+
+                try:
+                    logger.info(f"🔌 Спроба підключення до WebSocket: {ws_url}")
+                    self.pricing_engine.monitor = MempoolMonitor(ws_url)
+
+                    async def on_price_update(pool_addr):
+                        try:
+                            await self._tick()
+                        except Exception as e:
+                            logger.error(f"WS Tick error: {e}")
+
+                    self.pricing_engine.monitor.callback = on_price_update
+
+                    pool_addrs = [
+                        p.checksum if hasattr(p, "checksum") else str(p)
+                        for p in self.dex_pools
+                    ]
+
+                    test_monitor = MempoolMonitor(ws_url)
+                    try:
+                        block = await asyncio.wait_for(
+                            test_monitor.w3.eth.block_number, timeout=5.0
+                        )
+                        logger.info(f"   WSS підключено, поточний блок: {block}")
+                    except Exception as conn_err:
+                        raise ConnectionError(f"WSS не відповідає: {conn_err}")
+
+                    remaining_wss = fallback_wss[fallback_wss.index(ws_url) :]
+
+                    def make_task_error_handler(remaining):
+                        def handler(task):
+                            if task.cancelled():
+                                return
+                            exc = task.exception()
+                            if exc:
+                                logger.error(f"❌ WSS task впав: {exc}")
+                                logger.warning(
+                                    "🔄 WSS відключився, бот продовжує на HTTP polling"
+                                )
+
+                        return handler
+
+                    task = asyncio.create_task(
+                        self.pricing_engine.monitor.start_price_feed(pool_addrs)
+                    )
+                    task.add_done_callback(make_task_error_handler(remaining_wss))
+
+                    wss_active = True
+                    logger.info(f"✅ WSS моніторинг запущено: {ws_url}")
+                    break
+
+                except asyncio.TimeoutError:
+                    logger.error(f"❌ WebSocket {ws_url} — timeout підключення (5s)")
+                    logger.warning("🔄 Перемикаємось на наступний WSS вузол...")
+                    wss_active = False
+                    await asyncio.sleep(1)
+                except Exception as e:
+                    logger.error(f"❌ WebSocket {ws_url} впав або не підключився: {e}")
+                    logger.warning("🔄 Перемикаємось на наступний WSS вузол...")
+                    wss_active = False
+                    await asyncio.sleep(1)
+
+        if (
+            not wss_active or self.is_test_mode or not self.pricing_engine
+        ) and self.running:
+            if not self.is_test_mode and self.pricing_engine:
+                logger.critical("⚠️ Всі WebSocket з'єднання провалилися!")
+            logger.info("Starting reliable HTTP Polling loop (1 req/sec)...")
+            while self.running:
+                try:
+                    await self._tick()
+
+                    await asyncio.sleep(1.0)
+                except Exception as e:
+                    logger.error(f"HTTP Tick error: {e}")
+                    await asyncio.sleep(5.0)
 
     async def _tick(self):
-        if self.executor.circuit_breaker.is_open():
-            logger.info("Circuit breaker open")
+        if self._tick_lock.locked():
             return
 
-        for pair in self.pairs:
-            signal = self.generator.generate(pair, self.trade_size)
-            if signal is None:
-                if self.verbose:
-                    logger.info(
-                        f"🔕 {pair}: No profitable spread found (Ignored by Generator)"
-                    )
-                continue
+        async with self._tick_lock:
+            if self.executor.circuit_breaker.is_open():
+                logger.info("Circuit breaker open")
+                return
 
-            signal.score = float(self.scorer.score(signal, self.inventory.get_skews()))
+            for pair in self.pairs:
+                # FIX: Prevent blocking the asyncio event loop with synchronous calls (e.g. fetch_order_book)
+                loop = asyncio.get_event_loop()
+                signal = await loop.run_in_executor(
+                    None, self.generator.generate, pair, self.trade_size
+                )
 
-            if signal.score < 60.0:
-                if self.verbose:
-                    logger.info(
-                        f"📉 {pair}: Spread={signal.spread_bps:.1f} bps | Score={signal.score:.1f} -> REJECTED (Score too low)"
-                    )
-                continue
+                if signal is None:
+                    if self.verbose:
+                        logger.info(
+                            f"🔕 {pair}: No profitable spread found (Ignored by Generator)"
+                        )
+                    continue
 
-            logger.info(
-                f"🚀 ACTIONABLE SIGNAL: {pair} spread={signal.spread_bps:.1f}bps score={signal.score}"
-            )
+                signal.score = float(
+                    self.scorer.score(signal, self.inventory.get_skews())
+                )
 
-            ctx = await self.executor.execute(signal)
+                if signal.score < 60.0:
+                    if self.verbose:
+                        logger.info(
+                            f"📉 {pair}: Spread={signal.spread_bps:.1f} bps | Score={signal.score:.1f} -> REJECTED (Score too low)"
+                        )
+                    continue
 
-            self.scorer.record_result(pair, ctx.state == ExecutorState.DONE)
+                logger.info(
+                    f"🚀 ACTIONABLE SIGNAL: {pair} spread={signal.spread_bps:.1f}bps score={signal.score}"
+                )
 
-            if ctx.state == ExecutorState.DONE and ctx.actual_net_pnl is not None:
-                arb_record = execution_to_arb_record(ctx)
-                self.pnl_engine.record(arb_record)
-                logger.info(f"SUCCESS: PnL=${ctx.actual_net_pnl:.2f}")
-            else:
-                logger.warning(f"FAILED: {ctx.error}")
+                ctx = await self.executor.execute(signal)
 
-            await self._sync_balances()
+                self.scorer.record_result(pair, ctx.state == ExecutorState.DONE)
+
+                if ctx.state == ExecutorState.DONE and ctx.actual_net_pnl is not None:
+                    arb_record = execution_to_arb_record(ctx)
+                    self.pnl_engine.record(arb_record)
+                    logger.info(f"SUCCESS: PnL=${ctx.actual_net_pnl:.2f}")
+                else:
+                    logger.warning(f"FAILED: {ctx.error}")
+
+                await self._sync_balances()
 
     def stop(self):
         self.running = False

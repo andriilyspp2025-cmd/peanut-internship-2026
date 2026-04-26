@@ -162,6 +162,13 @@ class Executor:
             ctx.error = "DEX failed - unwound"
             return ctx
 
+        if leg2["filled"] / ctx.leg1_fill_size < self.config.min_fill_ratio:
+            ctx.state = ExecutorState.UNWINDING
+            await self._unwind(ctx)
+            ctx.state = ExecutorState.FAILED
+            ctx.error = "Leg2 partial fill below threshold - unwound"
+            return ctx
+
         ctx.leg2_fill_price = leg2["price"]
         ctx.leg2_fill_size = leg2["filled"]
         ctx.actual_net_pnl = self._calculate_pnl(ctx)
@@ -191,6 +198,11 @@ class Executor:
             ctx.error = "DEX failed (no cost via Flashbots)"
             return ctx
 
+        if leg1["filled"] / signal.size < self.config.min_fill_ratio:
+            ctx.state = ExecutorState.FAILED
+            ctx.error = "Partial DEX fill below threshold"
+            return ctx
+
         ctx.leg1_fill_price = leg1["price"]
         ctx.leg1_fill_size = leg1["filled"]
         ctx.state = ExecutorState.LEG1_FILLED
@@ -216,6 +228,13 @@ class Executor:
             await self._unwind(ctx)
             ctx.state = ExecutorState.FAILED
             ctx.error = "CEX failed after DEX - unwound"
+            return ctx
+
+        if leg2["filled"] / ctx.leg1_fill_size < self.config.min_fill_ratio:
+            ctx.state = ExecutorState.UNWINDING
+            await self._unwind(ctx)
+            ctx.state = ExecutorState.FAILED
+            ctx.error = "Leg2 partial fill below threshold - unwound"
             return ctx
 
         ctx.leg2_fill_price = leg2["price"]
@@ -251,9 +270,19 @@ class Executor:
     async def _execute_dex_leg(self, signal: Signal, size: Decimal) -> dict:
         if self.config.simulation_mode:
             await asyncio.sleep(0.5)
+
+            if signal.direction == Direction.BUY_CEX_SELL_DEX:
+                price = signal.dex_price * Decimal(
+                    "0.9998"
+                )  # selling on DEX → price goes down
+            else:
+                price = signal.dex_price * Decimal(
+                    "1.0002"
+                )  # buying on DEX → price goes up
+
             return {
                 "success": True,
-                "price": signal.dex_price * Decimal("0.9998"),
+                "price": price,
                 "filled": size,
             }
         raise NotImplementedError("Real DEX execution requires Week 2 integration")
@@ -279,19 +308,34 @@ class Executor:
                 "sell" if signal.direction == Direction.BUY_CEX_SELL_DEX else "buy"
             )
 
-            try:
-                self.exchange.exchange.create_market_order(
-                    symbol=signal.pair, side=unwind_side, amount=str(ctx.leg1_fill_size)
-                )
-                logger.info("Unwind successful. Emergency flat position taken.")
-            except Exception as e:
-                logger.error(
-                    f"FATAL: Unwind failed! Manual intervention required. Error: {e}"
-                )
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    self.exchange.exchange.create_market_order(
+                        symbol=signal.pair,
+                        side=unwind_side,
+                        amount=str(ctx.leg1_fill_size),
+                    )
+                    logger.info("Unwind successful. Emergency flat position taken.")
+                    break
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        logger.error(
+                            f"FATAL: Unwind failed after {max_retries} attempts! Manual intervention required. Error: {e}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Unwind attempt {attempt + 1} failed: {e}. Retrying..."
+                        )
+                        # Cannot await sleep in non-async if it's sync, but _unwind is async so we can
+                        # wait, but I'll use asyncio.sleep instead
+                        await asyncio.sleep(1.0)
 
         elif ctx.leg1_venue == "dex":
             logger.error(
-                "DEX unwind not fully implemented for Web3 yet. Check wallet balances!"
+                "FATAL: DEX unwind not implemented. "
+                f"Manual intervention required: sell {ctx.leg1_fill_size} "
+                f"{ctx.signal.pair.split('/')[0]} from wallet."
             )
 
     def _calculate_pnl(self, ctx: ExecutionContext) -> Decimal:
@@ -300,5 +344,9 @@ class Executor:
             gross = (ctx.leg2_fill_price - ctx.leg1_fill_price) * ctx.leg1_fill_size
         else:
             gross = (ctx.leg1_fill_price - ctx.leg2_fill_price) * ctx.leg1_fill_size
-        fees = ctx.leg1_fill_size * ctx.leg1_fill_price * Decimal("0.004")  # ~40 bps
-        return gross - fees
+
+        cex_fee = (
+            ctx.leg1_fill_size * ctx.leg1_fill_price * Decimal("0.001")
+        )  # 10 bps taker
+        dex_fee = ctx.leg2_fill_size * ctx.leg2_fill_price * Decimal("0.003")  # 30 bps
+        return gross - cex_fee - dex_fee

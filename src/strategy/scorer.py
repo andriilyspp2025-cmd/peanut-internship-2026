@@ -78,7 +78,7 @@ class SignalScorer:
         if ttl <= 0 or age >= ttl:
             return Decimal("0.0")
 
-        decay_rate = 3.0
+        decay_rate = 0.5
         decay_factor = math.exp(-decay_rate * (float(age) / float(ttl)))
 
         return Decimal(str(signal.score)) * Decimal(str(decay_factor))
