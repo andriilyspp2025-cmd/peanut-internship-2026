@@ -1,6 +1,6 @@
 # Architecture Decisions
 
-This document outlines the design architecture and decisions made in Week 1 for the Peanut Trading infrastructure.
+This document outlines the design architecture and decisions made during Weeks 1-5 for the Peanut Trading infrastructure.
 
 ## 1. No Floats Policy
 **Context:** Arbitrage algorithms often fail due to precision errors ("dust") left behind from fractional floating-point math in Python.
@@ -28,3 +28,23 @@ This document outlines the design architecture and decisions made in Week 1 for 
 **Context:** Forming signatures across non-standard dictionaries or networks demands exact predictability in encoding formats.
 **Decision:** Build a rigid serialization framework (`CanonicalSerializer`).
 **Implementation:** Dict keys are alphabetized, whitespace is stripped entirely, integers exceeding safe Javascript limits (`Number.MAX_SAFE_INTEGER`, 2^53 - 1) emit warnings to prevent silent frontend mismatches, and parsing ignores unreliable variables like emojis, keeping serialization completely deterministic across iteration tests.
+
+## 6. Dockerization & Service Orchestration
+**Context:** Production deployment required reliable restarts, consistent environments, and independent process monitoring.
+**Decision:** Use Docker Compose to orchestrate the core bot and an isolated watchdog process.
+**Implementation:** Added a `Dockerfile` and `docker-compose.yml` with two services (`arb-bot`, `watchdog`) and a shared volume for `/tmp` heartbeat exchange.
+
+## 7. Asynchronous Non-Blocking Operations
+**Context:** Blocking I/O (e.g., `ccxt.fetch_balance`, Web3 RPC calls, Telegram alerts) can stall the asyncio event loop and reduce HFT responsiveness.
+**Decision:** All blocking external calls must be executed in background threads.
+**Implementation:** Use `asyncio.to_thread()` for `ccxt` and Web3 calls, and refactor `TelegramAlert.send()` to dispatch in a non-blocking thread when a running loop is present.
+
+## 8. Graceful Shutdown & Dead Man's Switch
+**Context:** A frozen process or abrupt termination can leave positions unmanaged and stale state on disk.
+**Decision:** Implement a watchdog process and handle system signals for clean termination.
+**Implementation:** Handle `SIGTERM` in `scripts/arb_bot.py`, send a shutdown alert in `finally`, and clean up the heartbeat file. A standalone `scripts/watchdog.py` monitors heartbeat freshness and terminates the bot if it stops updating.
+
+## 9. Precision & Exchange Limits
+**Context:** Binance orders were rejected when amounts violated `LOT_SIZE` or `PRICE_TICK` filters.
+**Decision:** Round quantity and price to exchange-compliant steps before submission.
+**Implementation:** Add `round_quantity()` and `round_price()` helpers in `ExchangeClient` using `Decimal` rounding against `LOT_SIZE_STEP` and `PRICE_TICK` constants.

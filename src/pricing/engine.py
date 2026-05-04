@@ -42,18 +42,33 @@ class Quote:
 class PricingEngine:
     """Manages AMM prices, routing, simulation, and mempool monitoring."""
 
-    def __init__(self, chain_client: ChainClient, fork_url: str, ws_url: str = None):
+    def __init__(
+        self,
+        chain_client: ChainClient,
+        fork_url: str,
+        ws_url: str | None = None,
+        http_url: str | None = None,
+    ):
         self.client = chain_client
         self.simulator = ForkSimulator(fork_url)
         self.monitor = None
-        if ws_url:
+        if ws_url or http_url:
             try:
-                self.monitor = MempoolMonitor(ws_url, self._on_mempool_swap)
-                log.info(f"MempoolMonitor started on {ws_url}")
+                fallback_http = http_url or (
+                    chain_client.rpc_urls[0] if chain_client.rpc_urls else None
+                )
+                self.monitor = MempoolMonitor(
+                    ws_url, fallback_http, self._on_mempool_swap
+                )
+                log.info(
+                    "MempoolMonitor started with WSS=%s HTTP=%s",
+                    ws_url,
+                    fallback_http,
+                )
             except Exception as e:
                 log.error(f"Failed to start MempoolMonitor: {e}")
         else:
-            log.warning("WSS_URL not provided. Mempool monitoring is disabled.")
+            log.warning("No WSS or HTTP URL provided. Mempool monitoring is disabled.")
 
         self.pools: Dict[Address, UniswapV2Pair] = {}
         self.router: Optional[RouteFinder] = None
@@ -135,4 +150,8 @@ class PricingEngine:
 
     async def start_monitoring(self):
         """Connects and listens to the mempool stream."""
+        if self.monitor is None:
+            log.warning("Mempool monitor is not configured; skipping mempool startup.")
+            return
+
         await self.monitor.start_listening()

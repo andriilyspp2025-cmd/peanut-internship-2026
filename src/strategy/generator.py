@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 from src.inventory.tracker import Venue
 from src.core.types import Token, Address
 from src.exchange.client import ExchangeClient
+from src.pricing.v3_quoter import UniswapV3Pricer
 
 from .fees import FeeStructure
 from .signal import Signal, Direction
@@ -33,9 +34,11 @@ class SignalGenerator:
         self.max_position_usd = config.get("max_position_usd", Decimal("10_000"))
         self.signal_ttl = float(config.get("signal_ttl_seconds", 5.0))
         self.cooldown = float(config.get("cooldown_seconds", 2.0))
+        self.verbose = config.get("verbose", False)
 
         # Inject token map from configuration
         self.token_map = config.get("token_map", {})
+        self.dex_quote_map = config.get("dex_quote_map", {})
 
         self.last_signal_time: dict[str, float] = {}
 
@@ -127,48 +130,65 @@ class SignalGenerator:
             cex_ask = Decimal(str(ob["asks"][0][0]))
 
             if self.pricing is not None:
-                token_base, token_quote = self._pair_to_tokens(pair)  # (ETH, USDT)
-                gas_price = 1
+                token_base, token_quote = self._pair_to_tokens(pair)
+                dex_quote_symbol = self.dex_quote_map.get(pair, token_quote.symbol)
 
-                # 1. DEX SELL (Ми продаємо size ETH, отримуємо X USDT)
-                dex_sell_quote = self.pricing.get_quote(
-                    token_base,
-                    token_quote,
-                    int(size * 10**token_base.decimals),
-                    gas_price,
-                )
-                usdt_received = Decimal(str(dex_sell_quote.expected_output)) / Decimal(
-                    10**token_quote.decimals
-                )
-                dex_sell = usdt_received / size if size > 0 else Decimal("0")
+                if dex_quote_symbol not in self.token_map:
+                    raise KeyError(
+                        f"DEX quote token '{dex_quote_symbol}' is not configured for pair '{pair}'"
+                    )
 
-                # 2. DEX BUY (Ми віддаємо USDT, отримуємо size ETH)
-                # Оскільки AMM рахує "вперед", ми віддаємо приблизну суму (size * cex_ask) USDT і рахуємо ефективну ціну
-                usdt_to_spend = size * cex_ask
-                dex_buy_quote = self.pricing.get_quote(
-                    token_quote,
-                    token_base,
-                    int(usdt_to_spend * 10**token_quote.decimals),
-                    gas_price,
-                )
-                eth_received = Decimal(str(dex_buy_quote.expected_output)) / Decimal(
-                    10**token_base.decimals
+                token_dex_quote = Token(
+                    address=Address(self.token_map[dex_quote_symbol]["address"]),
+                    symbol=dex_quote_symbol,
+                    decimals=self.token_map[dex_quote_symbol]["decimals"],
                 )
 
-                if eth_received > Decimal("0"):
-                    dex_buy = usdt_to_spend / eth_received  # Ефективна ціна
+                v3_pricer = UniswapV3Pricer(self.pricing.client.w3)
+
+                # Використовуємо 1% Fee-пул для GMX/USDC на Arbitrum.
+                pool_fee_tier = 10000
+
+                # 1. DEX SELL (віддаємо GMX, отримуємо DEX quote, наприклад USDC)
+                amount_in_base_wei = int(size * (Decimal(10) ** token_base.decimals))
+                amount_out_quote_wei = v3_pricer.get_amount_out(
+                    token_base, token_dex_quote, amount_in_base_wei, pool_fee_tier
+                )
+
+                if amount_out_quote_wei > 0:
+                    quote_received = Decimal(amount_out_quote_wei) / Decimal(
+                        10**token_dex_quote.decimals
+                    )
+                    dex_sell = quote_received / size
                 else:
-                    dex_buy = Decimal("999999")  # Немає ліквідності
+                    dex_sell = Decimal("0")
+
+                # 2. DEX BUY (віддаємо DEX quote, отримуємо GMX)
+                amount_in_quote_wei = int(
+                    (size * cex_ask) * (Decimal(10) ** token_dex_quote.decimals)
+                )
+                amount_out_base_wei = v3_pricer.get_amount_out(
+                    token_dex_quote, token_base, amount_in_quote_wei, pool_fee_tier
+                )
+
+                if amount_out_base_wei > 0:
+                    base_received = Decimal(amount_out_base_wei) / Decimal(
+                        10**token_base.decimals
+                    )
+                    dex_buy = (size * cex_ask) / base_received
+                else:
+                    dex_buy = Decimal("999999")
             else:
                 mid = (cex_bid + cex_ask) / Decimal("2")
                 dex_buy = mid * Decimal("1.005")
                 dex_sell = mid * Decimal("1.008")
 
-            logger.info(
-                f"📊 MARKET {pair} | "
-                f"CEX (Bid: {cex_bid:.2f}, Ask: {cex_ask:.2f}) | "
-                f"DEX (Sell: {dex_sell:.2f}, Buy: {dex_buy:.2f})"
-            )
+            if self.verbose:
+                logger.info(
+                    f"📊 MARKET {pair} | "
+                    f"CEX (Bid: {cex_bid:.2f}, Ask: {cex_ask:.2f}) | "
+                    f"DEX (Sell: {dex_sell:.2f}, Buy: {dex_buy:.2f})"
+                )
 
             return {
                 "cex_bid": cex_bid,
@@ -186,6 +206,8 @@ class SignalGenerator:
         self, pair: str, direction: Direction, size: Decimal, price: Decimal
     ) -> bool:
         base, quote = pair.split("/")
+        dex_quote = self.dex_quote_map.get(pair, quote)
+
         if direction == Direction.BUY_CEX_SELL_DEX:
             return (
                 self.inventory.get_available(Venue.BINANCE, quote)
@@ -196,7 +218,7 @@ class SignalGenerator:
             return self.inventory.get_available(
                 Venue.BINANCE, base
             ) >= size and self.inventory.get_available(
-                Venue.WALLET, quote
+                Venue.WALLET, dex_quote
             ) >= size * price * Decimal(
                 "1.01"
             )

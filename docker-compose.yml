@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  arb-bot:
+    build: .
+    container_name: peanut-arb-bot
+    restart: always
+    stop_grace_period: 10s
+    env_file:
+      - .env
+    command: ["python", "-m", "scripts.arb_bot", "--mode", "prod", "--dry-run"]
+    volumes:
+      - ./logs:/app/logs
+      - shared-tmp:/tmp
+
+  watchdog:
+    build: .
+    container_name: peanut-watchdog
+    restart: always
+    env_file:
+      - .env
+    command: ["python", "scripts/watchdog.py"]
+    pid: "service:arb-bot"
+    depends_on:
+      - arb-bot
+    volumes:
+      - shared-tmp:/tmp
+
+volumes:
+  shared-tmp:
+

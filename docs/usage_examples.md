@@ -91,3 +91,18 @@ python -m src.chain.analyzer <tx_hash> --rpc https://eth.llamarpc.com
 ```bash
 python -m src.chain.analyzer <tx_hash> --format json
 ```
+
+## 5. Monitoring and Alerts (.env)
+
+Enable Telegram alerts and configure the bot environment:
+
+```env
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+TELEGRAM_ENABLED=true
+
+ARBITRUM_RPC_URL=https://arb1.arbitrum.io/rpc
+WSS_URL=wss://eth-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
+```
+
+When enabled, the bot sends alerts on startup, shutdown, and critical errors.
