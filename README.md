@@ -3,7 +3,7 @@
 
 This repository contains the final project of the Peanut Trade Quant Internship.
 
-The system is a deterministic, high-performance arbitrage engine operating between centralized exchanges (Binance Testnet) and decentralized exchanges on Ethereum (Uniswap V2). It is designed with production-grade architecture, focusing on execution safety, precision, and resilience under real market conditions.
+The system is a deterministic, high-performance arbitrage engine operating between centralized exchanges (Binance Testnet) and decentralized exchanges on Arbitrum (Uniswap V3). It is designed with production-grade architecture, focusing on execution safety, precision, and resilience under real market conditions.
 
 ---
 
@@ -27,6 +27,12 @@ The system is a deterministic, high-performance arbitrage engine operating betwe
   - Opportunity scoring
   - Execution
   - Recovery
+
+- **DEX Pricing via Uniswap V3 Quoter**  
+  DEX quotes are sourced from the Arbitrum Uniswap V3 Quoter for accurate output estimates.
+
+- **Mempool-Aware Refresh**  
+  Optional V3 swap event monitoring triggers faster price refresh when pools move.
 
 ---
 
@@ -54,9 +60,9 @@ The system is divided into two main components:
 - Core domain types (`TokenAmount`, `Address`)
 
 ### Week 2: Pricing Engine
-- Uniswap V2 constant product formula
-- Graph-based route search (DFS)
-- Local fork-based simulation (Anvil/Hardhat)
+- Uniswap V3 Quoter pricing on Arbitrum
+- V3 swap event monitoring for fast refresh
+- Fork-based simulation for diagnostics
 
 ### Week 3: Inventory & CEX
 - Binance Testnet integration via `ccxt`
@@ -69,9 +75,39 @@ The system is divided into two main components:
 - Async execution engine
 - Circuit breaker and replay protection
 
+### Week 5: Production Hardening
+- Dockerized deployment with Compose
+- Dead man's switch watchdog + heartbeat
+- Telegram alerts, risk limits, and pre-trade validation
+
 ---
 
-## Quick Start
+## Deployment & Infrastructure
+
+The production deployment uses Docker and Docker Compose as the primary entry point.
+
+- `arb-bot`: main arbitrage runner (`scripts.arb_bot`) in production mode
+- `watchdog`: dead man's switch process that monitors the heartbeat file
+- `shared-tmp`: shared `/tmp` volume used to exchange heartbeat files between services
+
+Build and start:
+
+```bash
+docker-compose up -d --build
+```
+
+---
+
+## Safety & Monitoring
+
+- Dead man's switch watchdog monitors the heartbeat file and terminates the bot if it stalls
+- Graceful shutdown on `SIGTERM` ensures the heartbeat is cleaned up and a stop alert is emitted
+- Telegram alerts notify on startup, shutdown, errors, and kill switch activation
+- Risk limits (`RiskManager`) and signal validation (`PreTradeValidator`) enforce safety gates
+
+---
+
+## Quick Start (Docker)
 
 ### 1. Environment Setup
 
@@ -81,46 +117,77 @@ cd peanut-internship-2026
 cp .env.example .env
 ````
 
-Fill in:
+Fill in the required values in `.env`:
 
-* `PRIVATE_KEY`
-* `RPC_URL`
-* Binance API credentials
+```env
+ENVIRONMENT=prod
+ARBITRUM_RPC_URL=https://arb1.arbitrum.io/rpc
+RPC_URL=https://your-arbitrum-rpc
+SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+ETH_RPC_URL=https://eth-mainnet.g.alchemy.com/v2/YOUR_ALCHEMY_KEY
+WSS_URL=wss://your-arbitrum-wss
+
+PRIVATE_KEY=0x...
+ADDRESS=0x...
+
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+TELEGRAM_ENABLED=true
+
+BINANCE_TESTNET_API_KEY=your_key_here
+BINANCE_TESTNET_SECRET=your_secret_here
+BINANCE_PROD_API_KEY=your_real_api_key_here
+BINANCE_PROD_SECRET=your_real_secret_here
+```
 
 ---
 
-### 2. Installation
+### 2. Build and Run
+
+```bash
+docker-compose up -d --build
+make docker-up
+```
+
+### 3. Stop / Cleanup
+
+```bash
+docker-compose stop
+docker-compose down
+make docker-stop
+make docker-down
+```
+
+---
+
+## Local Development (Optional)
+
+### Installation
 
 ```bash
 make install
 ```
 
----
-
-### 3. Run Tests
+### Run Tests
 
 ```bash
 make test
 ```
 
----
-
-## Usage
-
-### Using Makefile (Recommended)
+### Usage (Local)
 
 ```bash
 make sim        # Simulation mode
 make prod       # Production mode
 make verbose    # Production with detailed logs
+make dry-run    # Production dry run (no execution)
 ```
-
-### Direct CLI
 
 ```bash
 python -m scripts.arb_bot --mode test
 python -m scripts.arb_bot --mode prod
 python -m scripts.arb_bot --mode prod --verbose
+python -m scripts.arb_bot --mode prod --dry-run
 ```
 
 ---
@@ -156,7 +223,7 @@ INFO SUCCESS: PnL=$8.56
 src/
   core/              # Domain models and math
   pricing/           # DEX pricing and routing
-  execution/         # Trade execution engine
+  executor/          # Trade execution engine
   strategy/          # Signal + scoring logic
   integration/       # External services (CEX, RPC)
 
@@ -174,7 +241,8 @@ tests/
 * Python 3.10+
 * Web3.py
 * CCXT (Binance)
-* Anvil / Hardhat (forking)
+* Uniswap V3 Quoter (Arbitrum)
+* Docker / Docker Compose
 * Decimal (fixed-point arithmetic)
 
 Quality:
@@ -204,6 +272,12 @@ make check       # Format + lint + test
 make sim         # Run bot in simulation mode
 make prod        # Run bot in production mode
 make verbose     # Detailed logging
+make dry-run     # Production dry run (no execution)
+
+make docker-build # Build Docker image
+make docker-up    # Start Docker services
+make docker-stop  # Stop Docker services
+make docker-down  # Stop and remove containers
 
 make demo-arb    # Arbitrage checker
 make clean       # Cleanup cache files

@@ -1,4 +1,4 @@
-.PHONY: install test format lint check run sim prod verbose clean
+.PHONY: install test format lint check run sim prod verbose dry-run docker-build docker-up docker-stop docker-down clean
 
 install:
 	python -m pip install --upgrade pip
@@ -25,6 +25,23 @@ prod:
 
 verbose:
 	python -m scripts.arb_bot --mode prod --verbose
+
+dry-run:
+	python -m scripts.arb_bot --mode prod --dry-run
+
+# --- Docker ---
+
+docker-build:
+	docker-compose build
+
+docker-up:
+	docker-compose up -d --build
+
+docker-stop:
+	docker-compose stop
+
+docker-down:
+	docker-compose down
 
 # --- Arbitrage Demo / Debug ---
 
