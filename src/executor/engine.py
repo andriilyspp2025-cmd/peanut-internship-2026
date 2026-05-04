@@ -4,10 +4,11 @@ import logging
 from enum import Enum, auto
 from typing import Optional
 from decimal import Decimal
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from src.strategy.signal import Direction
 from src.strategy.signal import Signal
+from src.core.types import Address
 from src.executor.recovery import CircuitBreaker, ReplayProtection
 
 logger = logging.getLogger("Executor")
@@ -63,11 +64,15 @@ class Executor:
         pricing_module,
         inventory_tracker,
         config: Optional[ExecutorConfig] = None,
+        token_map: dict[str, dict] | None = None,
+        wallet_address: Address | None = None,
     ):
         self.exchange = exchange_client
         self.pricing = pricing_module
         self.inventory = inventory_tracker
         self.config = config or ExecutorConfig()
+        self.token_map = token_map or {}
+        self.wallet_address = wallet_address
 
         self.circuit_breaker = CircuitBreaker()
         self.replay_protection = ReplayProtection()
@@ -254,11 +259,17 @@ class Executor:
             }
         # Real execution via ExchangeClient (Week 3 API)
         side = "buy" if signal.direction == Direction.BUY_CEX_SELL_DEX else "sell"
+
+        safe_price = (
+            signal.cex_price * Decimal("1.005")
+            if side == "buy"
+            else signal.cex_price * Decimal("0.995")
+        )
         result = self.exchange.create_limit_ioc_order(
             symbol=signal.pair,
             side=side,
-            amount=str(actual_size),
-            price=str(signal.cex_price * Decimal("1.001")),
+            amount=actual_size,
+            price=safe_price,
         )
         return {
             "success": result["status"] == "filled",
@@ -268,24 +279,154 @@ class Executor:
         }
 
     async def _execute_dex_leg(self, signal: Signal, size: Decimal) -> dict:
+        V3_ROUTER = "0xE592427A0AEce92De3Edee1F18E0157C05861564"
+        V3_ROUTER_ABI = [
+            {
+                "inputs": [
+                    {
+                        "components": [
+                            {
+                                "internalType": "address",
+                                "name": "tokenIn",
+                                "type": "address",
+                            },
+                            {
+                                "internalType": "address",
+                                "name": "tokenOut",
+                                "type": "address",
+                            },
+                            {"internalType": "uint24", "name": "fee", "type": "uint24"},
+                            {
+                                "internalType": "address",
+                                "name": "recipient",
+                                "type": "address",
+                            },
+                            {
+                                "internalType": "uint256",
+                                "name": "deadline",
+                                "type": "uint256",
+                            },
+                            {
+                                "internalType": "uint256",
+                                "name": "amountIn",
+                                "type": "uint256",
+                            },
+                            {
+                                "internalType": "uint256",
+                                "name": "amountOutMinimum",
+                                "type": "uint256",
+                            },
+                            {
+                                "internalType": "uint160",
+                                "name": "sqrtPriceLimitX96",
+                                "type": "uint160",
+                            },
+                        ],
+                        "internalType": "struct ISwapRouter.ExactInputSingleParams",
+                        "name": "params",
+                        "type": "tuple",
+                    }
+                ],
+                "name": "exactInputSingle",
+                "outputs": [
+                    {"internalType": "uint256", "name": "amountOut", "type": "uint256"}
+                ],
+                "stateMutability": "payable",
+                "type": "function",
+            }
+        ]
+
         if self.config.simulation_mode:
             await asyncio.sleep(0.5)
+            if signal.direction == Direction.BUY_CEX_SELL_DEX:
+                price = signal.dex_price * Decimal("0.9998")
+            else:
+                price = signal.dex_price * Decimal("1.0002")
+            return {"success": True, "price": price, "filled": size}
+
+        logger.info(
+            f"🚀 EXECUTING DEX LEG: {signal.direction.name} {size} {signal.pair}"
+        )
+
+        try:
+            if not self.token_map:
+                raise ValueError("Executor missing token_map for DEX execution")
+            if self.wallet_address is None:
+                raise ValueError("Executor missing wallet address for DEX execution")
+
+            base_sym, quote_sym = signal.pair.split("/")
+            token_in_addr = self.pricing.client.w3.to_checksum_address(
+                self.token_map[base_sym]["address"]
+            )
+            token_out_addr = self.pricing.client.w3.to_checksum_address(
+                self.token_map[quote_sym]["address"]
+            )
 
             if signal.direction == Direction.BUY_CEX_SELL_DEX:
-                price = signal.dex_price * Decimal(
-                    "0.9998"
-                )  # selling on DEX → price goes down
+                t_in, t_out = token_in_addr, token_out_addr
+                decimals_in = self.token_map[base_sym]["decimals"]
+                decimals_out = self.token_map[quote_sym]["decimals"]
+                amount_in_dec = size
+                expected_out_dec = size * signal.dex_price
             else:
-                price = signal.dex_price * Decimal(
-                    "1.0002"
-                )  # buying on DEX → price goes up
+                t_in, t_out = token_out_addr, token_in_addr
+                decimals_in = self.token_map[quote_sym]["decimals"]
+                decimals_out = self.token_map[base_sym]["decimals"]
+                amount_in_dec = size * signal.dex_price
+                expected_out_dec = size
+
+            amount_in_wei = int(amount_in_dec * (Decimal(10) ** decimals_in))
+            min_out_wei = int(
+                (expected_out_dec * Decimal("0.995")) * (Decimal(10) ** decimals_out)
+            )
+
+            params = {
+                "tokenIn": t_in,
+                "tokenOut": t_out,
+                "fee": 10000,
+                "recipient": self.wallet_address.checksum,
+                "deadline": int(time.time()) + 120,
+                "amountIn": amount_in_wei,
+                "amountOutMinimum": min_out_wei,
+                "sqrtPriceLimitX96": 0,
+            }
+
+            router_contract = self.pricing.client.w3.eth.contract(
+                address=self.pricing.client.w3.to_checksum_address(V3_ROUTER),
+                abi=V3_ROUTER_ABI,
+            )
+            tx_data = router_contract.encodeABI(
+                fn_name="exactInputSingle", args=[params]
+            )
+
+            from src.chain.builder import TransactionBuilder
+            from src.core.types import Address, TokenAmount
+            from src.core.wallet import WalletManager
+
+            def send_tx():
+                wallet = WalletManager.from_env()
+                builder = (
+                    TransactionBuilder(self.pricing.client, wallet)
+                    .to(Address(V3_ROUTER))
+                    .value(TokenAmount(raw=0, decimals=18))
+                    .data(bytes.fromhex(tx_data[2:]))
+                    .with_gas_estimate()
+                    .with_gas_price("high")
+                )
+                return builder.send_and_wait(timeout=self.config.leg2_timeout)
+
+            receipt = await asyncio.to_thread(send_tx)
 
             return {
-                "success": True,
-                "price": price,
-                "filled": size,
+                "success": receipt.status,
+                "price": signal.dex_price,
+                "filled": size if receipt.status else Decimal("0"),
+                "tx_hash": receipt.tx_hash,
             }
-        raise NotImplementedError("Real DEX execution requires Week 2 integration")
+
+        except Exception as e:
+            logger.error(f"DEX Execution failed: {e}")
+            return {"success": False, "error": str(e)}
 
     async def _unwind(self, ctx: ExecutionContext):
         """Market sell/buy to flatten stuck position."""
@@ -332,11 +473,44 @@ class Executor:
                         await asyncio.sleep(1.0)
 
         elif ctx.leg1_venue == "dex":
-            logger.error(
-                "FATAL: DEX unwind not implemented. "
-                f"Manual intervention required: sell {ctx.leg1_fill_size} "
-                f"{ctx.signal.pair.split('/')[0]} from wallet."
+            if not ctx.leg1_fill_size or ctx.leg1_fill_size == Decimal("0"):
+                return
+
+            signal = ctx.signal
+            logger.critical(
+                "UNWINDING DEX: attempting to reverse %s %s",
+                ctx.leg1_fill_size,
+                signal.pair,
             )
+
+            emergency_direction = (
+                Direction.BUY_CEX_SELL_DEX
+                if signal.direction == Direction.BUY_DEX_SELL_CEX
+                else Direction.BUY_DEX_SELL_CEX
+            )
+            slippage = Decimal("0.05")
+            if emergency_direction == Direction.BUY_DEX_SELL_CEX:
+                emergency_dex_price = signal.dex_price * (Decimal("1") + slippage)
+            else:
+                emergency_dex_price = signal.dex_price * (Decimal("1") - slippage)
+
+            emergency_signal = replace(
+                signal,
+                direction=emergency_direction,
+                dex_price=emergency_dex_price,
+                size=ctx.leg1_fill_size,
+            )
+
+            try:
+                result = await self._execute_dex_leg(
+                    emergency_signal, ctx.leg1_fill_size
+                )
+                if result.get("success"):
+                    logger.info("DEX unwind successful. Emergency flat position taken.")
+                else:
+                    logger.error("DEX unwind failed: %s", result.get("error"))
+            except Exception as exc:
+                logger.critical("DEX unwind exception: %s", exc)
 
     def _calculate_pnl(self, ctx: ExecutionContext) -> Decimal:
         signal = ctx.signal

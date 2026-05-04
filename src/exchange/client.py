@@ -1,10 +1,28 @@
 import logging
 import time
 import ccxt
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Dict
 
 logger = logging.getLogger(__name__)
+
+MIN_NOTIONAL = Decimal("5.0")
+LOT_SIZE_STEP = Decimal("0.0001")
+PRICE_TICK = Decimal("0.01")
+
+
+def round_quantity(qty: Decimal, step: Decimal) -> Decimal:
+    if step <= Decimal("0"):
+        raise ValueError("LOT_SIZE_STEP must be positive")
+    steps = (qty / step).to_integral_value(rounding=ROUND_DOWN)
+    return steps * step
+
+
+def round_price(price: Decimal, tick: Decimal) -> Decimal:
+    if tick <= Decimal("0"):
+        raise ValueError("PRICE_TICK must be positive")
+    ticks = (price / tick).to_integral_value(rounding=ROUND_HALF_UP)
+    return ticks * tick
 
 
 class InsufficientLiquidityError(Exception):
@@ -26,18 +44,50 @@ class ExchangeClient:
         """
         config = config.copy()
         config["enableRateLimit"] = True
-
         config["verbose"] = False
+
+        options = config.get("options", {})
+        options["defaultType"] = "spot"
+        options["recvWindow"] = 10000
+        options["adjustForTimeDifference"] = True
+        config["options"] = options
 
         for key in ["pairs", "dex_pools", "trade_size", "simulation", "signal_config"]:
             config.pop(key, None)
 
         self.exchange = ccxt.binance(config)
+        if config.get("sandbox"):
+            self.exchange.set_sandbox_mode(True)
+        self.exchange.options["adjustForTimeDifference"] = True
+
+        try:
+            self.exchange.load_time_difference()
+        except Exception as e:
+            logger.warning(f"Could not sync Binance time before load_markets: {e}")
+
         try:
             self.exchange.load_markets()
-            logger.info("Successfully connected to Binance Testnet")
+            logger.info("Successfully connected to Binance")
+        except ccxt.InvalidNonce as e:
+            message = str(e)
+            if "Timestamp for this request was" in message:
+                logger.warning(
+                    "Binance timestamp ahead error detected; syncing time and retrying."
+                )
+                try:
+                    self.exchange.load_time_difference()
+                    self.exchange.load_markets()
+                    logger.info("Successfully connected to Binance after time sync")
+                except Exception as retry_exception:
+                    logger.critical(
+                        f"Failed to connect to Binance after time sync: {retry_exception}"
+                    )
+                    raise
+            else:
+                logger.critical(f"Failed to connect to Binance: {e}")
+                raise
         except (ccxt.AuthenticationError, ccxt.NetworkError) as e:
-            logger.critical(f"Failed to connect to Binance Testnet: {e}")
+            logger.critical(f"Failed to connect to Binance: {e}")
             raise
 
     def _safe_fetch_order_book(self, symbol: str, limit: int = 20) -> dict | None:
@@ -153,17 +203,26 @@ class ExchangeClient:
         Place a LIMIT IOC (Immediate Or Cancel) order.
         Expects Decimal for amount and price to avoid float precision loss.
         """
+        safe_amount = round_quantity(amount, LOT_SIZE_STEP)
+        safe_price = round_price(price, PRICE_TICK)
+        notional = safe_amount * safe_price
+        if safe_amount <= Decimal("0"):
+            raise ValueError("Order amount rounds to zero after LOT_SIZE_STEP")
+        if notional < MIN_NOTIONAL:
+            raise ValueError(
+                f"Order value {notional} violates MIN_NOTIONAL of {MIN_NOTIONAL}"
+            )
         try:
             response = self.exchange.create_order(
                 symbol=symbol,
                 type="limit",
                 side=side,
-                amount=str(amount),
-                price=str(price),
+                amount=str(safe_amount),
+                price=str(safe_price),
                 params={"timeInForce": "IOC"},
             )
             return self._normalize_order_response(
-                response, symbol, side, "limit", "IOC", amount
+                response, symbol, side, "limit", "IOC", safe_amount
             )
         except ccxt.NetworkError as e:
             logger.error(f"Network error creating IOC order for {symbol}: {e}")
