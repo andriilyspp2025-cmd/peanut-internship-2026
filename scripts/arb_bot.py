@@ -32,6 +32,8 @@ from src.safety.validator import PreTradeValidator, ValidatorConfig
 
 logger = logging.getLogger("ArbBot")
 
+STABLE_ASSETS = {"USD", "USDT", "USDC", "DAI"}
+
 
 def execution_to_arb_record(ctx) -> ArbRecord:
     """Bridge between Week 4's ExecutionContext and Week 3's ArbRecord."""
@@ -146,6 +148,65 @@ class ArbBot:
             path.write_text(str(time.time()), encoding="utf-8")
         except Exception as exc:
             logger.warning("Failed to write heartbeat: %s", exc)
+
+    def _is_stable_asset(self, asset: str) -> bool:
+        return asset.upper() in STABLE_ASSETS
+
+    def _price_asset_usd(self, asset: str) -> Decimal | None:
+        for pair in self.pairs:
+            try:
+                base, quote = pair.split("/")
+            except ValueError:
+                continue
+            if base != asset or not self._is_stable_asset(quote):
+                continue
+            try:
+                order_book = self.exchange.fetch_order_book(pair)
+            except Exception as exc:
+                logger.warning("Failed to fetch order book for %s: %s", pair, exc)
+                return None
+            best_bid = order_book["best_bid"][0]
+            best_ask = order_book["best_ask"][0]
+            return (best_bid + best_ask) / Decimal("2")
+        return None
+
+    def _position_state(self, signal) -> tuple[Decimal, int, bool]:
+        snapshot = self.inventory.snapshot()
+        totals = snapshot.get("totals", {})
+        base, _ = signal.pair.split("/")
+        min_open_usd = self.risk_manager.limits.min_open_position_usd
+
+        price_cache: dict[str, Decimal] = {}
+        open_assets: set[str] = set()
+
+        for asset, amount in totals.items():
+            if self._is_stable_asset(asset):
+                continue
+            price = price_cache.get(asset)
+            if price is None:
+                if asset == base:
+                    price = signal.cex_price
+                else:
+                    price = self._price_asset_usd(asset)
+                if price is None:
+                    if self.verbose:
+                        logger.info(
+                            "Open position check skipped unpriced asset: %s", asset
+                        )
+                    continue
+                price_cache[asset] = price
+            asset_usd = amount * price
+            if abs(asset_usd) >= min_open_usd:
+                open_assets.add(asset)
+
+        if self._is_stable_asset(base):
+            current_position_usd = totals.get(base, Decimal("0"))
+            is_new_position = False
+        else:
+            current_position_usd = totals.get(base, Decimal("0")) * signal.cex_price
+            is_new_position = base not in open_assets
+
+        return current_position_usd, len(open_assets), is_new_position
 
     async def _sync_balances(self):
         """Sync balances from both CEX and on-chain wallet."""
@@ -489,8 +550,17 @@ class ArbBot:
 
                 trade_notional_usd = signal.size * signal.cex_price
                 total_capital_usd = self._estimate_total_capital_usd(signal)
+                (
+                    current_position_usd,
+                    open_positions,
+                    is_new_position,
+                ) = self._position_state(signal)
                 risk_result = self.risk_manager.pre_trade_check(
-                    trade_notional_usd, total_capital_usd
+                    trade_notional_usd,
+                    total_capital_usd,
+                    current_position_usd=current_position_usd,
+                    open_positions=open_positions,
+                    is_new_position=is_new_position,
                 )
                 if not risk_result.allowed:
                     logger.warning(f"Risk check failed: {risk_result.reason}")
@@ -628,11 +698,14 @@ if __name__ == "__main__":
                 "verbose": args.verbose,
             },
             "risk_config": {
-                "max_trade_usd": "20",
+                "max_trade_usd": "5.0",
+                "max_position_usd": "50",
                 "max_daily_loss_usd": "15",
                 "max_drawdown_pct": "0.15",
                 "max_trades_per_hour": 20,
                 "max_consecutive_losses": 3,
+                "max_open_positions": 2,
+                "min_open_position_usd": "1",
                 "max_signal_age_seconds": "5",
                 "min_spread_bps": "50",
                 "max_spread_bps": "1000",

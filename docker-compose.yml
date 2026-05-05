@@ -8,7 +8,7 @@ services:
     stop_grace_period: 10s
     env_file:
       - .env
-    command: ["python", "-m", "scripts.arb_bot", "--mode", "prod", "--dry-run"]
+    command: ["python", "-m", "scripts.arb_bot", "--mode", "prod"]
     volumes:
       - ./logs:/app/logs
       - shared-tmp:/tmp

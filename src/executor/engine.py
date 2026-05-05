@@ -53,6 +53,8 @@ class ExecutorConfig:
     min_fill_ratio: Decimal = Decimal("0.8")
     use_flashbots: bool = True
     simulation_mode: bool = True
+    cex_slippage_bps: Decimal = Decimal("50")
+    default_arbitrum_gas_usd: Decimal = Decimal("0.10")
 
 
 class Executor:
@@ -260,10 +262,11 @@ class Executor:
         # Real execution via ExchangeClient (Week 3 API)
         side = "buy" if signal.direction == Direction.BUY_CEX_SELL_DEX else "sell"
 
+        slippage_multiplier = self.config.cex_slippage_bps / Decimal("10000")
         safe_price = (
-            signal.cex_price * Decimal("1.005")
+            signal.cex_price * (Decimal("1") + slippage_multiplier)
             if side == "buy"
-            else signal.cex_price * Decimal("0.995")
+            else signal.cex_price * (Decimal("1") - slippage_multiplier)
         )
         result = self.exchange.create_limit_ioc_order(
             symbol=signal.pair,
@@ -523,4 +526,5 @@ class Executor:
             ctx.leg1_fill_size * ctx.leg1_fill_price * Decimal("0.001")
         )  # 10 bps taker
         dex_fee = ctx.leg2_fill_size * ctx.leg2_fill_price * Decimal("0.003")  # 30 bps
-        return gross - cex_fee - dex_fee
+        gas_fee = self.config.default_arbitrum_gas_usd
+        return gross - cex_fee - dex_fee - gas_fee

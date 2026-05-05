@@ -26,10 +26,13 @@ def _normalize_drawdown(value: Decimal) -> Decimal:
 @dataclass(frozen=True)
 class RiskLimits:
     max_trade_usd: Decimal = Decimal("10")
+    max_position_usd: Decimal = Decimal("50")
     max_daily_loss_usd: Decimal = Decimal("15")
     max_drawdown_pct: Decimal = Decimal("0.15")
-    max_trades_per_hour: int = 20
+    max_trades_per_hour: int = 10
     max_consecutive_losses: int = 3
+    max_open_positions: int = 2
+    min_open_position_usd: Decimal = Decimal("1")
 
     @classmethod
     def from_config(cls, config: dict | None) -> "RiskLimits":
@@ -39,10 +42,13 @@ class RiskLimits:
         )
         return cls(
             max_trade_usd=_to_decimal(config.get("max_trade_usd"), "10"),
+            max_position_usd=_to_decimal(config.get("max_position_usd"), "50"),
             max_daily_loss_usd=_to_decimal(config.get("max_daily_loss_usd"), "15"),
             max_drawdown_pct=drawdown,
-            max_trades_per_hour=int(config.get("max_trades_per_hour", 20)),
+            max_trades_per_hour=int(config.get("max_trades_per_hour", 10)),
             max_consecutive_losses=int(config.get("max_consecutive_losses", 3)),
+            max_open_positions=int(config.get("max_open_positions", 2)),
+            min_open_position_usd=_to_decimal(config.get("min_open_position_usd"), "1"),
         )
 
 
@@ -130,6 +136,9 @@ class RiskManager:
         self,
         trade_notional_usd: Decimal,
         total_capital_usd: Decimal | None,
+        current_position_usd: Decimal | None = None,
+        open_positions: int | None = None,
+        is_new_position: bool | None = None,
         now: float | None = None,
     ) -> RiskCheckResult:
         now_ts = self._now(now)
@@ -154,6 +163,25 @@ class RiskManager:
             return RiskCheckResult(
                 False,
                 f"Trade notional exceeds max_trade_usd: {trade_notional_usd}",
+            )
+        if current_position_usd is not None:
+            projected_position = current_position_usd + trade_notional_usd
+            if projected_position > self.limits.max_position_usd:
+                return RiskCheckResult(
+                    False,
+                    "Position exceeds max_position_usd: "
+                    f"{projected_position} > {self.limits.max_position_usd}",
+                )
+        if (
+            open_positions is not None
+            and is_new_position is not None
+            and is_new_position
+            and open_positions >= self.limits.max_open_positions
+        ):
+            return RiskCheckResult(
+                False,
+                "Max open positions reached: "
+                f"{open_positions} >= {self.limits.max_open_positions}",
             )
         if self._daily_loss_usd > self.limits.max_daily_loss_usd:
             return RiskCheckResult(
