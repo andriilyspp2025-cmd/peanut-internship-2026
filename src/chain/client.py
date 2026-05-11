@@ -129,13 +129,22 @@ class ChainClient:
         self.router = RpcRouter(http_endpoints=rpc_urls, wss_endpoints=wss_endpoints)
 
         # Create Web3 once and reuse it (avoid eth_chainId on every rotation)
-        self.w3 = self._create_w3(self.router.current_http)
+        self.w3 = self._connect(self.router.current_http)
         logger.info(f"✅ ChainClient initialized with {len(rpc_urls)} RPC endpoints")
 
     def _create_w3(self, url: str) -> Web3:
         """Create Web3 instance with HTTP provider."""
         provider = Web3.HTTPProvider(url, request_kwargs={"timeout": self.timeout})
         return Web3(provider)
+
+    def _connect(self, url: str) -> Web3:
+        """Backward-compatible alias for tests patching _connect."""
+        return self._create_w3(url)
+
+    @property
+    def _current_rpc_index(self) -> int:
+        """Expose router index for legacy tests."""
+        return self.router.current_index
 
     def _rotate_rpc(self, reason: str = "error"):
         """
@@ -186,27 +195,36 @@ class ChainClient:
                 ):
                     raise e
 
-                # Check if error requires rotation (router.on_error returns dict or None)
-                result = self.router.on_error(e, endpoint_type="http")
-                if result and result.get("http"):
-                    # Rotate provider in-place
-                    new_provider = Web3.HTTPProvider(
-                        result["http"], request_kwargs={"timeout": self.timeout}
-                    )
-                    self.w3.provider = new_provider
+                error_str = str(e).lower()
+                is_retriable = (
+                    "429" in error_str
+                    or "request limit" in error_str
+                    or "rate limit" in error_str
+                    or "timeout" in error_str
+                    or "connection" in error_str
+                    or "websocket" in error_str
+                )
+
+                if attempt == self.max_retries - 1:
+                    if is_retriable:
+                        raise RPCError(
+                            f"Action {name} failed after {self.max_retries} attempts: {e}"
+                        )
+                    raise e
+
+                if is_retriable:
+                    # Rotate on retriable errors
+                    result = self.router.on_error(e, endpoint_type="http")
+                    if result and result.get("http"):
+                        new_provider = Web3.HTTPProvider(
+                            result["http"], request_kwargs={"timeout": self.timeout}
+                        )
+                        self.w3.provider = new_provider
                     time.sleep(delay)
                     delay = min(delay * 2, 10.0)  # Cap backoff at 10s
                     continue
 
-                # Last attempt or non-recoverable error
-                if attempt == self.max_retries - 1:
-                    raise RPCError(
-                        f"Action {name} failed after {self.max_retries} attempts: {e}"
-                    )
-
-                # Recoverable error but no rotation needed
-                time.sleep(delay)
-                delay = min(delay * 2, 10.0)
+                raise e
 
     def _erc20_contract(self, token: Token):
         """Build a minimal ERC20 contract instance for balance/allowance calls."""

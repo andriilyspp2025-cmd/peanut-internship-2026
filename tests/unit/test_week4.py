@@ -115,7 +115,7 @@ def test_generate_signal_no_opportunity():
         }
 
     gen._fetch_prices = flat_prices
-    result = gen.generate("ETH/USDT", Decimal("0.1"))
+    result = gen.generate("ETH/USDT", size=Decimal("0.1"))
     assert result is None
 
 
@@ -141,8 +141,8 @@ def test_cooldown_prevents_rapid_signals():
         "dex_sell": Decimal("2050.0"),
     }
 
-    s1 = gen.generate("ETH/USDT", Decimal("5.0"))
-    s2 = gen.generate("ETH/USDT", Decimal("5.0"))
+    s1 = gen.generate("ETH/USDT", size=Decimal("5.0"))
+    s2 = gen.generate("ETH/USDT", size=Decimal("5.0"))
 
     assert s1 is not None, "Перший виклик має повернути Signal"
     assert s2 is None, "Другий виклик у cooldown має повернути None"
@@ -170,7 +170,7 @@ def test_direction_selection():
         "dex_sell": Decimal("1990.0"),
     }
 
-    signal = gen.generate("ETH/USDT", Decimal("5.0"))
+    signal = gen.generate("ETH/USDT", size=Decimal("5.0"))
 
     assert signal is not None
     assert signal.direction == Direction.BUY_DEX_SELL_CEX
@@ -585,7 +585,7 @@ def test_generate_insufficient_inventory_marks_flag():
         "dex_sell": Decimal("2050.0"),
     }
 
-    signal = gen.generate("ETH/USDT", Decimal("5.0"))
+    signal = gen.generate("ETH/USDT", size=Decimal("5.0"))
 
     assert signal is not None, "Сигнал повертається навіть при 0 балансі"
     assert signal.inventory_ok is False, "Прапор має бути False"
@@ -613,7 +613,7 @@ def test_generate_exceeds_max_position():
         "dex_sell": Decimal("2050.0"),
     }
 
-    signal = gen.generate("ETH/USDT", Decimal("5.0"))
+    signal = gen.generate("ETH/USDT", size=Decimal("5.0"))
 
     if signal is not None:
         assert signal.within_limits is False
@@ -627,7 +627,7 @@ def test_exchange_error_returns_none():
     inv = make_inventory()
     gen = SignalGenerator(ex, None, inv, FeeStructure(), {})
 
-    result = gen.generate("ETH/USDT", Decimal("0.1"))
+    result = gen.generate("ETH/USDT", size=Decimal("0.1"))
 
     assert result is None
     ex.fetch_order_book.assert_called_once_with("ETH/USDT")

@@ -9,7 +9,6 @@ Supports synchronized HTTP and WSS endpoint rotation:
 
 import logging
 import time
-import itertools
 from typing import Optional, List
 
 logger = logging.getLogger("RpcRouter")
@@ -56,8 +55,8 @@ class RpcRouter:
         # Use the maximum length so HTTP and WSS rotate in lockstep by index.
         # If one list is shorter, we select items using modulo arithmetic.
         endpoint_count = max(len(self.http_endpoints), len(self.wss_endpoints))
+        self._endpoint_count = endpoint_count
         self._current_idx = 0
-        self._endpoint_cycle = itertools.cycle(range(endpoint_count))
         self._error_count: dict[int, int] = {i: 0 for i in range(endpoint_count)}
         self._last_rotation_time = time.time()
 
@@ -104,7 +103,7 @@ class RpcRouter:
             else None
         )
 
-        self._current_idx = next(self._endpoint_cycle)
+        self._current_idx = (self._current_idx + 1) % self._endpoint_count
         self._last_rotation_time = time.time()
 
         new_http = self.current_http

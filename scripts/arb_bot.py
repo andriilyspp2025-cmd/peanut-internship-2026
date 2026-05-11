@@ -80,7 +80,7 @@ PAIRS_CONFIG = {
         "fee_tier": 100,
         "dex_quote": "USDC",
         "cex_symbol": "ESP/USDT",
-        "enabled": False,
+        "enabled": True,
     },
     "ZRO/USDC": {
         "v3_pool": "0xeb1f77a0eca759c226d442f9ae5249121a555129",

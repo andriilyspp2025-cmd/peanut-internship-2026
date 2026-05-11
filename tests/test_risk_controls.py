@@ -1,4 +1,5 @@
 import logging
+import pytest
 from decimal import Decimal
 
 from src.config.logger import setup_logger
@@ -12,6 +13,13 @@ from src.safety.killswitch import (
     safety_check,
 )
 from src.safety.limits import RiskLimits, RiskManager
+
+
+@pytest.fixture
+def logger() -> logging.Logger:
+    setup_logger(filename_prefix="test_risk_controls", level="INFO")
+    clear_kill_switch()
+    return logging.getLogger("TestRiskControls")
 
 
 def test_circuit_breaker(logger: logging.Logger) -> None:

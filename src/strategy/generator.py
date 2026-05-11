@@ -72,13 +72,22 @@ class SignalGenerator:
         )
 
     def generate(
-        self, pair: str, trade_size_usd: Decimal, dex_quote_token: str = "USDC"
+        self,
+        pair: str,
+        trade_size_usd: Optional[Decimal] = None,
+        *,
+        size: Optional[Decimal] = None,
+        dex_quote_token: str = "USDC",
     ) -> Optional[Signal]:
         """
         Attempt to generate a signal for the given pair and USD trade size.
         Returns Signal if opportunity found and validated, None otherwise.
         dex_quote_token: override the DEX quote token (e.g. 'USDC' for all pairs).
         """
+        if trade_size_usd is None and size is None:
+            logger.warning("Missing trade size for %s", pair)
+            return None
+
         now = time.time()
         last_time = self.last_signal_time.get(pair, 0.0)
         if now - last_time < self.cooldown:
@@ -91,24 +100,63 @@ class SignalGenerator:
             )
             return None
 
+        size_override = None
+        if size is not None:
+            try:
+                size_override = Decimal(str(size))
+            except (InvalidOperation, TypeError) as exc:
+                logger.warning("Invalid size override for %s: %s", pair, exc)
+                return None
+            if size_override <= Decimal("0"):
+                logger.debug("🔕 %s skipped: non-positive size=%s", pair, size_override)
+                return None
+
+        if trade_size_usd is not None:
+            try:
+                trade_size_usd = Decimal(str(trade_size_usd))
+            except (InvalidOperation, TypeError) as exc:
+                logger.warning("Invalid trade_size_usd for %s: %s", pair, exc)
+                return None
+
+            if trade_size_usd <= Decimal("0"):
+                logger.debug(
+                    "🔕 %s skipped: non-positive trade_size_usd=%s",
+                    pair,
+                    trade_size_usd,
+                )
+                return None
+
         try:
-            trade_size_usd = Decimal(str(trade_size_usd))
-        except (InvalidOperation, TypeError) as exc:
-            logger.warning("Invalid trade_size_usd for %s: %s", pair, exc)
-            return None
-
-        if trade_size_usd <= Decimal("0"):
-            logger.debug(
-                "🔕 %s skipped: non-positive trade_size_usd=%s", pair, trade_size_usd
+            if size_override is None:
+                prices = self._fetch_prices(pair, trade_size_usd)
+            else:
+                prices = self._fetch_prices(pair, trade_size_usd, size_override)
+        except TypeError:
+            # Legacy stubs in tests may accept only (pair, size)
+            fallback_size = (
+                trade_size_usd if trade_size_usd is not None else size_override
             )
-            return None
-
-        prices = self._fetch_prices(pair, trade_size_usd)
+            prices = self._fetch_prices(pair, fallback_size)
         if prices is None:
             logger.debug("🔕 %s відхилено: немає цін з CEX/DEX", pair)
             return None
 
-        size = prices["size"]
+        size_value = prices.get("size")
+        if size_value is None:
+            if size_override is not None:
+                size_value = size_override
+            elif trade_size_usd is not None:
+                cex_ask = prices.get("cex_ask")
+                if cex_ask is None or cex_ask <= Decimal("0"):
+                    logger.debug("🔕 %s skipped: invalid cex_ask", pair)
+                    return None
+                size_value = trade_size_usd / cex_ask
+            else:
+                logger.debug("🔕 %s skipped: missing size", pair)
+                return None
+            prices["size"] = size_value
+
+        size = size_value
 
         # Calculate spreads both directions
         spread_a = (
@@ -337,7 +385,12 @@ class SignalGenerator:
             )
             return self.fees.gas_cost_usd
 
-    def _fetch_prices(self, pair: str, trade_size_usd: Decimal) -> Optional[dict]:
+    def _fetch_prices(
+        self,
+        pair: str,
+        trade_size_usd: Optional[Decimal],
+        size_override: Optional[Decimal] = None,
+    ) -> Optional[dict]:
         """
         Fetch CEX order book and DEX price from PricingEngine (Week 2).
         If PricingEngine is not available, falls back to simulated DEX prices.
@@ -359,7 +412,15 @@ class SignalGenerator:
             if cex_ask <= Decimal("0"):
                 raise ValueError("CEX ask price must be positive")
 
-            size = trade_size_usd / cex_ask
+            if size_override is not None:
+                if size_override <= Decimal("0"):
+                    raise ValueError("size_override must be positive")
+                size = size_override
+                trade_size_usd = size * cex_ask
+            else:
+                if trade_size_usd is None:
+                    raise ValueError("trade_size_usd is required when size is not set")
+                size = trade_size_usd / cex_ask
 
             if self.pricing is not None:
                 token_base, token_quote = self._pair_to_tokens(pair)
@@ -447,10 +508,15 @@ class SignalGenerator:
         self, pair: str, direction: Direction, size: Decimal, price: Decimal
     ) -> bool:
         # Resolve token symbols safely (handles internal suffixes like '#500')
-        token_base, token_quote = self._pair_to_tokens(pair)
-        base = token_base.symbol
-        quote = token_quote.symbol
-        dex_quote = self.dex_quote_map.get(pair, quote)
+        if not self.token_map:
+            clean_pair = pair.strip().upper().split("#")[0]
+            base, quote = clean_pair.split("/")
+            dex_quote = self.dex_quote_map.get(pair, quote)
+        else:
+            token_base, token_quote = self._pair_to_tokens(pair)
+            base = token_base.symbol
+            quote = token_quote.symbol
+            dex_quote = self.dex_quote_map.get(pair, quote)
 
         if direction == Direction.BUY_CEX_SELL_DEX:
             return (
