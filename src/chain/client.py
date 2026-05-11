@@ -1,3 +1,4 @@
+import logging
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -5,7 +6,13 @@ from typing import Optional, Any, Callable
 from web3 import Web3
 from web3.exceptions import TransactionNotFound
 
-from src.core.types import Address, TokenAmount, TransactionRequest, TransactionReceipt
+from src.core.types import (
+    Address,
+    Token,
+    TokenAmount,
+    TransactionRequest,
+    TransactionReceipt,
+)
 from src.chain.errors import (
     RPCError,
     ChainError,
@@ -14,6 +21,9 @@ from src.chain.errors import (
     NonceTooLow,
     ReplacementUnderpriced,
 )
+from src.config.rpc_router import RpcRouter
+
+logger = logging.getLogger("ChainClient")
 
 _RPC_ERROR_MAP = [
     ("insufficient funds", InsufficientFunds),
@@ -23,6 +33,30 @@ _RPC_ERROR_MAP = [
     ("already known", ReplacementUnderpriced),
     ("execution reverted", ChainError),
 ]
+
+_ERC20_ABI = [
+    {
+        "constant": True,
+        "inputs": [{"name": "owner", "type": "address"}],
+        "name": "balanceOf",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "constant": True,
+        "inputs": [
+            {"name": "owner", "type": "address"},
+            {"name": "spender", "type": "address"},
+        ],
+        "name": "allowance",
+        "outputs": [{"name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+_SIMULATION_BALANCE = Decimal("20000")
 
 
 def _parse_rpc_error(exc: Exception) -> Exception:
@@ -73,6 +107,7 @@ class ChainClient:
         native_symbol: str = "ETH",
         timeout: int = 30,
         max_retries: int = 3,
+        simulation_mode: bool = False,
     ):
         if not rpc_urls:
             raise ValueError("Must provide at least one RPC URL")
@@ -81,27 +116,65 @@ class ChainClient:
         self.native_symbol = native_symbol
         self.timeout = timeout
         self.max_retries = max_retries
+        self.simulation_mode = simulation_mode
 
-        self._current_rpc_index = 0
-        self.w3 = self._connect(self.rpc_urls[self._current_rpc_index])
+        # Initialize RPC router with HTTP and optional WSS endpoints
+        from src.config.config import config as app_config
 
-    def _connect(self, url: str) -> Web3:
+        wss_endpoints = (
+            app_config.WSS_RPC_ENDPOINTS
+            if hasattr(app_config, "WSS_RPC_ENDPOINTS")
+            else None
+        )
+        self.router = RpcRouter(http_endpoints=rpc_urls, wss_endpoints=wss_endpoints)
+
+        # Create Web3 once and reuse it (avoid eth_chainId on every rotation)
+        self.w3 = self._create_w3(self.router.current_http)
+        logger.info(f"✅ ChainClient initialized with {len(rpc_urls)} RPC endpoints")
+
+    def _create_w3(self, url: str) -> Web3:
+        """Create Web3 instance with HTTP provider."""
         provider = Web3.HTTPProvider(url, request_kwargs={"timeout": self.timeout})
         return Web3(provider)
 
-    def _rotate_rpc(self):
-        """Твоя перевага: швидке і перманентне перемикання нод."""
-        self._current_rpc_index = (self._current_rpc_index + 1) % len(self.rpc_urls)
-        new_url = self.rpc_urls[self._current_rpc_index]
-        self.w3 = self._connect(new_url)
+    def _rotate_rpc(self, reason: str = "error"):
+        """
+        Rotate to next RPC endpoint WITHOUT recreating Web3.
+
+        This preserves the w3 object and only changes the underlying provider,
+        avoiding the expensive eth_chainId call that happens during __init__.
+        """
+        # RpcRouter.rotate() returns dict with http, wss, index
+        result = self.router.rotate(reason=reason, endpoint_type="both")
+        new_http_url = result.get("http")
+
+        if new_http_url:
+            # Replace provider in-place instead of recreating w3
+            new_provider = Web3.HTTPProvider(
+                new_http_url, request_kwargs={"timeout": self.timeout}
+            )
+            self.w3.provider = new_provider
+            logger.warning(
+                f"🔄 HTTP RPC rotated to index {result.get('index')}: {new_http_url[:60]}..."
+            )
+            return new_http_url
+
+        return None
 
     def _execute(self, func: Callable[[], Any], name: str) -> Any:
-        """Твоя перевага: чиста ізоляція мережевої логіки."""
+        """
+        Execute function with automatic retry and RPC rotation on 429/timeout.
+
+        Uses RpcRouter.on_error() for intelligent error handling.
+        """
         delay = 1.0
         for attempt in range(self.max_retries):
             try:
-                return func()
+                result = func()
+                self.router.reset_error_count()  # Success: reset error counter
+                return result
             except Exception as e:
+                # Don't retry on application errors
                 if isinstance(
                     e,
                     (
@@ -113,32 +186,66 @@ class ChainClient:
                 ):
                     raise e
 
+                # Check if error requires rotation (router.on_error returns dict or None)
+                result = self.router.on_error(e, endpoint_type="http")
+                if result and result.get("http"):
+                    # Rotate provider in-place
+                    new_provider = Web3.HTTPProvider(
+                        result["http"], request_kwargs={"timeout": self.timeout}
+                    )
+                    self.w3.provider = new_provider
+                    time.sleep(delay)
+                    delay = min(delay * 2, 10.0)  # Cap backoff at 10s
+                    continue
+
+                # Last attempt or non-recoverable error
                 if attempt == self.max_retries - 1:
                     raise RPCError(
                         f"Action {name} failed after {self.max_retries} attempts: {e}"
                     )
 
-                error_msg = str(e).lower()
-                if "429" in error_msg or "timeout" in error_msg:
-                    self._rotate_rpc()
-                    time.sleep(delay)
-                    delay *= 2
-                else:
-                    raise e
+                # Recoverable error but no rotation needed
+                time.sleep(delay)
+                delay = min(delay * 2, 10.0)
+
+    def _erc20_contract(self, token: Token):
+        """Build a minimal ERC20 contract instance for balance/allowance calls."""
+        return self.w3.eth.contract(address=token.address.checksum, abi=_ERC20_ABI)
 
     def get_balance(
-        self, address: Address, block_identifier="latest", *args, **kwargs
+        self,
+        address: Address,
+        block_identifier: str | Token = "latest",
+        *args,
+        **kwargs,
     ) -> TokenAmount:
-        # Оскільки PricingEngine з 2-го тижня може передавати сюди об'єкт Token,
-        # ми маємо перехопити це, щоб Web3 не впав при серіалізації:
-        is_token = hasattr(block_identifier, "address")
+        """
+        Returns native balance or ERC20 balance when a Token is provided as block_identifier.
+        ERC20 balances are mocked when simulation_mode=True to avoid false negatives.
+        """
+        token = None
+        if isinstance(block_identifier, Token):
+            token = block_identifier
+        elif hasattr(block_identifier, "address") and hasattr(
+            block_identifier, "decimals"
+        ):
+            token = block_identifier
 
         def _request():
-            if is_token:
-                # Тимчасово повертаємо "безкінечний" баланс для ERC20,
-                # щоб PricingEngine міг пропустити пре-флайт чеки й перейти до симуляції.
+            if token is not None:
+                if self.simulation_mode:
+                    return TokenAmount.from_human(
+                        _SIMULATION_BALANCE,
+                        token.decimals,
+                        getattr(token, "symbol", "ERC20"),
+                    )
+
+                contract = self._erc20_contract(token)
+                raw = contract.functions.balanceOf(address.checksum).call()
                 return TokenAmount(
-                    raw=20000000000000000000000, decimals=18, symbol="ERC20"
+                    raw=int(raw),
+                    decimals=token.decimals,
+                    symbol=getattr(token, "symbol", "ERC20"),
                 )
 
             raw_wei = self.w3.eth.get_balance(address.checksum, block_identifier)
@@ -146,9 +253,32 @@ class ChainClient:
 
         return self._execute(_request, "get_balance")
 
-    def get_allowance(self, *args, **kwargs) -> TokenAmount:
-        # Заглушка для PricingEngine, який викликає client.get_allowance()
-        return TokenAmount(raw=20000000000000000000000, decimals=18, symbol="ERC20")
+    def get_allowance(
+        self,
+        owner: Address,
+        spender: Address,
+        token: Token,
+        block_identifier: str = "latest",
+    ) -> TokenAmount:
+        """Returns ERC20 allowance; mocked when simulation_mode=True."""
+
+        def _request():
+            if self.simulation_mode:
+                return TokenAmount.from_human(
+                    _SIMULATION_BALANCE,
+                    token.decimals,
+                    token.symbol,
+                )
+
+            contract = self._erc20_contract(token)
+            raw = contract.functions.allowance(owner.checksum, spender.checksum).call(
+                block_identifier=block_identifier
+            )
+            return TokenAmount(
+                raw=int(raw), decimals=token.decimals, symbol=token.symbol
+            )
+
+        return self._execute(_request, "get_allowance")
 
     def get_nonce(self, address: Address, block: str = "pending") -> int:
         def _request():
@@ -194,6 +324,22 @@ class ChainClient:
                 )
 
         return self._execute(_request, "get_gas_price")
+
+    def estimate_gas_cost_usd(
+        self,
+        gas_units: int,
+        eth_price_usd: Decimal,
+        buffer_bps: Decimal = Decimal("20"),
+    ) -> Decimal:
+        """Estimate gas cost in USD using current gas price and an optional buffer."""
+        if gas_units <= 0:
+            raise ValueError("gas_units must be positive")
+
+        gas_price = self.get_gas_price().get_max_fee(priority="medium")
+        gas_cost_wei = gas_units * gas_price
+        gas_cost_eth = Decimal(gas_cost_wei) / Decimal("1000000000000000000")
+        buffer_multiplier = (Decimal("10000") + buffer_bps) / Decimal("10000")
+        return gas_cost_eth * eth_price_usd * buffer_multiplier
 
     def estimate_gas(self, tx: TransactionRequest) -> int:
         def _request():

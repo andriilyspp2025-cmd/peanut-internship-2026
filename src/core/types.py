@@ -187,6 +187,9 @@ class TransactionRequest:
     max_fee_per_gas: Optional[int] = None
     max_priority_fee: Optional[int] = None
     chain_id: int = 1
+    from_address: Optional[str] = (
+        None  # Потрібно для estimate_gas з правильного гаманця
+    )
 
     def to_dict(self) -> dict:
         """Convert to web3-compatible dict."""
@@ -196,6 +199,10 @@ class TransactionRequest:
             "data": self.data,
             "chainId": self.chain_id,
         }
+        # 'from' критично для estimate_gas — без нього RPC використовує 0x000...000
+        # що не має approve, і Uniswap повертає STF (Safe Transfer Failed)
+        if self.from_address is not None:
+            tx["from"] = self.from_address
         if self.nonce is not None:
             tx["nonce"] = self.nonce
         if self.gas_limit is not None:
