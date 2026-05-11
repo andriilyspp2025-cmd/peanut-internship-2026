@@ -39,7 +39,11 @@ class TransactionBuilder:
         self._max_fee_per_gas: Optional[int] = None
         self._max_priority_fee: Optional[int] = None
 
-        self._chain_id: int = 1
+        # Читаємо chain_id з підключеного RPC (Arbitrum=42161, не хардкод 1)
+        try:
+            self._chain_id: int = client.w3.eth.chain_id
+        except Exception:
+            self._chain_id: int = 1
 
     def to(self, address: Address) -> "TransactionBuilder":
         if not isinstance(address, Address):
@@ -84,6 +88,7 @@ class TransactionBuilder:
             data=self._data,
             nonce=self._nonce if self._nonce is not None else 0,
             chain_id=self._chain_id,
+            from_address=self.wallet.address,
         )
 
         estimated_gas = self.client.estimate_gas(temp_tx)

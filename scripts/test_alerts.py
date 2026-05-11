@@ -36,10 +36,13 @@ async def simulate_bad_trading_day() -> None:
 
     config = {
         "max_trade_usd": "20",
+        "max_position_usd": "50",
         "max_daily_loss_usd": "15",
         "max_drawdown_pct": "0.15",
         "max_trades_per_hour": 20,
         "max_consecutive_losses": 3,
+        "max_open_positions": 2,
+        "min_open_position_usd": "1",
     }
     limits = RiskLimits.from_config(config)
     risk_manager = RiskManager(limits)
@@ -68,6 +71,9 @@ async def simulate_bad_trading_day() -> None:
         check_result = risk_manager.pre_trade_check(
             trade_notional_usd=trade["notional"],
             total_capital_usd=current_capital,
+            current_position_usd=Decimal("0"),
+            open_positions=0,
+            is_new_position=True,
         )
 
         if not check_result.allowed:

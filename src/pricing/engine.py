@@ -48,22 +48,33 @@ class PricingEngine:
         fork_url: str,
         ws_url: str | None = None,
         http_url: str | None = None,
+        rpc_router=None,
     ):
         self.client = chain_client
         self.simulator = ForkSimulator(fork_url)
         self.monitor = None
-        if ws_url or http_url:
+        self.rpc_router = rpc_router or getattr(chain_client, "router", None)
+
+        # Prefer synchronized WSS from router if available
+        effective_wss = None
+        if self.rpc_router and hasattr(self.rpc_router, "current_wss"):
+            effective_wss = self.rpc_router.current_wss
+        elif ws_url:
+            effective_wss = ws_url
+
+        if effective_wss or http_url:
             try:
                 fallback_http = http_url or (
                     chain_client.rpc_urls[0] if chain_client.rpc_urls else None
                 )
                 self.monitor = MempoolMonitor(
-                    ws_url, fallback_http, self._on_mempool_swap
+                    effective_wss, fallback_http, self._on_mempool_swap
                 )
                 log.info(
-                    "MempoolMonitor started with WSS=%s HTTP=%s",
-                    ws_url,
-                    fallback_http,
+                    "✅ MempoolMonitor started [WSS=%s HTTP=%s] (router-sync=%s)",
+                    effective_wss[:50] if effective_wss else None,
+                    fallback_http[:50] if fallback_http else None,
+                    bool(self.rpc_router),
                 )
             except Exception as e:
                 log.error(f"Failed to start MempoolMonitor: {e}")
@@ -75,11 +86,27 @@ class PricingEngine:
 
     def load_pools(self, pool_addresses: List[Address]):
         """Populates pool reserves from chain and initializes the router."""
-        log.info(f"Loading {len(pool_addresses)} pools from chain")
+        log.info("Loading %s pools from chain", len(pool_addresses))
+        self.pools = {}
+        skipped = 0
         for addr in pool_addresses:
-            self.pools[addr] = UniswapV2Pair.from_chain(addr, self.client)
+            try:
+                self.pools[addr] = UniswapV2Pair.from_chain(addr, self.client)
+            except Exception as exc:
+                skipped += 1
+                log.warning("Skipping pool %s: %s", addr, exc)
+
+        if not self.pools:
+            self.router = None
+            log.warning("No valid V2 pools loaded; routing disabled.")
+            return
+
         self.router = RouteFinder(list(self.pools.values()))
-        log.info("Pools loaded and RouteFinder initialized.")
+        log.info(
+            "Pools loaded and RouteFinder initialized (%s pools, %s skipped).",
+            len(self.pools),
+            skipped,
+        )
 
     def refresh_pool(self, address: Address):
         """Refreshes a single pool's state."""

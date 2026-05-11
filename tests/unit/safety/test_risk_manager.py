@@ -15,6 +15,9 @@ def test_pre_trade_check_allows_within_limits():
     result = manager.pre_trade_check(
         trade_notional_usd=Decimal("5"),
         total_capital_usd=Decimal("100"),
+        current_position_usd=Decimal("0"),
+        open_positions=0,
+        is_new_position=True,
         now=1000.0,
     )
     assert result.allowed
@@ -29,6 +32,9 @@ def test_trade_frequency_limit_blocks():
     result = manager.pre_trade_check(
         trade_notional_usd=Decimal("5"),
         total_capital_usd=Decimal("100"),
+        current_position_usd=Decimal("0"),
+        open_positions=0,
+        is_new_position=True,
         now=1002.0,
     )
     assert not result.allowed
@@ -47,6 +53,9 @@ def test_daily_loss_limit_blocks():
     result = manager.pre_trade_check(
         trade_notional_usd=Decimal("5"),
         total_capital_usd=Decimal("100"),
+        current_position_usd=Decimal("0"),
+        open_positions=0,
+        is_new_position=True,
         now=1001.0,
     )
     assert not result.allowed
@@ -59,6 +68,9 @@ def test_drawdown_blocks_when_exceeded():
     result_ok = manager.pre_trade_check(
         trade_notional_usd=Decimal("5"),
         total_capital_usd=Decimal("100"),
+        current_position_usd=Decimal("0"),
+        open_positions=0,
+        is_new_position=True,
         now=1000.0,
     )
     assert result_ok.allowed
@@ -66,6 +78,57 @@ def test_drawdown_blocks_when_exceeded():
     result_bad = manager.pre_trade_check(
         trade_notional_usd=Decimal("5"),
         total_capital_usd=Decimal("70"),
+        current_position_usd=Decimal("0"),
+        open_positions=0,
+        is_new_position=True,
         now=1001.0,
     )
     assert not result_bad.allowed
+
+
+def test_max_position_blocks_when_exceeded():
+    limits = RiskLimits(max_position_usd=Decimal("10"))
+    manager = RiskManager(limits)
+
+    result = manager.pre_trade_check(
+        trade_notional_usd=Decimal("6"),
+        total_capital_usd=Decimal("100"),
+        current_position_usd=Decimal("5"),
+        open_positions=1,
+        is_new_position=False,
+        now=1000.0,
+    )
+
+    assert not result.allowed
+
+
+def test_max_open_positions_blocks_new_asset():
+    limits = RiskLimits(max_open_positions=2)
+    manager = RiskManager(limits)
+
+    result = manager.pre_trade_check(
+        trade_notional_usd=Decimal("5"),
+        total_capital_usd=Decimal("100"),
+        current_position_usd=Decimal("0"),
+        open_positions=2,
+        is_new_position=True,
+        now=1000.0,
+    )
+
+    assert not result.allowed
+
+
+def test_max_open_positions_allows_existing_asset():
+    limits = RiskLimits(max_open_positions=2)
+    manager = RiskManager(limits)
+
+    result = manager.pre_trade_check(
+        trade_notional_usd=Decimal("5"),
+        total_capital_usd=Decimal("100"),
+        current_position_usd=Decimal("2"),
+        open_positions=2,
+        is_new_position=False,
+        now=1000.0,
+    )
+
+    assert result.allowed

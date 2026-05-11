@@ -4,6 +4,8 @@ from enum import Enum
 import time
 import uuid
 
+from src.config.config import config
+
 
 class Direction(Enum):
     BUY_CEX_SELL_DEX = "buy_cex_sell_dex"
@@ -34,6 +36,25 @@ class Signal:
     inventory_ok: bool
     within_limits: bool
 
+    def validation_issues(self) -> list[str]:
+        """Return a list of reasons why the signal is not valid."""
+        issues: list[str] = []
+
+        if time.time() >= self.expiry:
+            issues.append("expired signal")
+        if not self.inventory_ok:
+            issues.append("inventory_ok=False")
+        if not self.within_limits:
+            issues.append("within_limits=False")
+        if self.expected_net_pnl < config.MIN_PROFIT_USD:
+            issues.append(
+                f"expected_net_pnl={self.expected_net_pnl} < min_profit_usd={config.MIN_PROFIT_USD}"
+            )
+        if self.score <= 0:
+            issues.append(f"score={self.score} <= 0")
+
+        return issues
+
     @classmethod
     def create(cls, pair: str, direction: Direction, **kwargs) -> "Signal":
         return cls(
@@ -45,13 +66,7 @@ class Signal:
         )
 
     def is_valid(self) -> bool:
-        return (
-            time.time() < self.expiry
-            and self.inventory_ok
-            and self.within_limits
-            and self.expected_net_pnl > 0
-            and self.score > 0
-        )
+        return not self.validation_issues()
 
     def age_seconds(self) -> Decimal:
         return Decimal(str(time.time())) - Decimal(str(self.timestamp))

@@ -1,14 +1,35 @@
+import asyncio
 import logging
 import time
-import ccxt
 from decimal import Decimal, ROUND_DOWN, ROUND_HALF_UP
 from typing import Dict
+
+import ccxt
 
 logger = logging.getLogger(__name__)
 
 MIN_NOTIONAL = Decimal("5.0")
 LOT_SIZE_STEP = Decimal("0.0001")
 PRICE_TICK = Decimal("0.01")
+
+
+def round_price_adaptive(price: Decimal, tick: Decimal) -> Decimal:
+    """
+    Round price to tick precision, with automatic downgrade for very low prices.
+    For tokens < $0.10, use finer precision to preserve slippage buffer.
+    """
+    if tick <= Decimal("0"):
+        raise ValueError("PRICE_TICK must be positive")
+
+    # For very low prices, use finer tick to avoid wiping out slippage buffer
+    if price > Decimal("0") and price < Decimal("0.10"):
+        # Use 1/1000th of price as minimum tick, but cap at default tick
+        adaptive_tick = min(tick, price / Decimal("1000"))
+    else:
+        adaptive_tick = tick
+
+    ticks = (price / adaptive_tick).to_integral_value(rounding=ROUND_HALF_UP)
+    return ticks * adaptive_tick
 
 
 def round_quantity(qty: Decimal, step: Decimal) -> Decimal:
@@ -25,8 +46,34 @@ def round_price(price: Decimal, tick: Decimal) -> Decimal:
     return ticks * tick
 
 
+def get_price_tick_for_symbol(exchange_obj, symbol: str) -> Decimal:
+    """
+    Extract price precision (tick size) from Binance market info.
+    Fallback to global PRICE_TICK if not available.
+    """
+    try:
+        if hasattr(exchange_obj, "markets") and symbol in exchange_obj.markets:
+            market = exchange_obj.markets[symbol]
+            if market.get("precision") and market["precision"].get("price"):
+                tick_str = str(market["precision"]["price"])
+                # Handle scientific notation (e.g., '0.0001' or 'e-8')
+                tick_val = Decimal(tick_str)
+                if tick_val > Decimal("0"):
+                    return tick_val
+    except Exception as e:
+        logger.warning(f"Failed to extract price tick for {symbol}: {e}")
+
+    return PRICE_TICK
+
+
 class InsufficientLiquidityError(Exception):
     """Raised when orderbook is empty or lacks liquidity."""
+
+    pass
+
+
+class OrderBookFetchError(Exception):
+    """Raised when order book cannot be fetched due to network or rate limit."""
 
     pass
 
@@ -68,6 +115,8 @@ class ExchangeClient:
         try:
             self.exchange.load_markets()
             logger.info("Successfully connected to Binance")
+            # Cache symbol-specific price ticks after markets loaded
+            self._price_ticks_cache = {}
         except ccxt.InvalidNonce as e:
             message = str(e)
             if "Timestamp for this request was" in message:
@@ -78,6 +127,7 @@ class ExchangeClient:
                     self.exchange.load_time_difference()
                     self.exchange.load_markets()
                     logger.info("Successfully connected to Binance after time sync")
+                    self._price_ticks_cache = {}
                 except Exception as retry_exception:
                     logger.critical(
                         f"Failed to connect to Binance after time sync: {retry_exception}"
@@ -90,7 +140,17 @@ class ExchangeClient:
             logger.critical(f"Failed to connect to Binance: {e}")
             raise
 
-    def _safe_fetch_order_book(self, symbol: str, limit: int = 20) -> dict | None:
+    def get_price_tick(self, symbol: str) -> Decimal:
+        """Get price tick for symbol with caching and fallback."""
+        if hasattr(self, "_price_ticks_cache") and symbol in self._price_ticks_cache:
+            return self._price_ticks_cache[symbol]
+
+        tick = get_price_tick_for_symbol(self.exchange, symbol)
+        if hasattr(self, "_price_ticks_cache"):
+            self._price_ticks_cache[symbol] = tick
+        return tick
+
+    def _safe_fetch_order_book(self, symbol: str, limit: int = 20) -> dict:
         """
         Internal helper: Fetches raw L2 order book and handles rate limits.
         """
@@ -107,26 +167,63 @@ class ExchangeClient:
                     )
                     time.sleep(10)
 
+            if not raw_ob:
+                raise OrderBookFetchError(f"Empty order book response for {symbol}")
+
             return raw_ob
         except ccxt.RateLimitExceeded as e:
-            logger.error(f" Rate Limit Exceeded: {e}")
-            return None
+            logger.error(f"Rate Limit Exceeded: {e}")
+            raise OrderBookFetchError(f"Rate limit exceeded for {symbol}") from e
         except ccxt.NetworkError as e:
-            logger.error(f"Network issue  (NetworkError): {e}")
-            return None
+            logger.error(f"Network issue (NetworkError): {e}")
+            raise OrderBookFetchError(f"Network error for {symbol}") from e
         except Exception as e:
             logger.error(
-                f" Unknown error occurred while fetching order book for {symbol}: {e}"
+                f"Unknown error occurred while fetching order book for {symbol}: {e}"
             )
-            return None
+            raise OrderBookFetchError(f"Order book fetch failed for {symbol}") from e
+
+    def _fetch_order_book_with_retry(
+        self, symbol: str, limit: int = 20, retries: int = 2
+    ) -> dict:
+        last_exc: Exception | None = None
+        for attempt in range(retries + 1):
+            try:
+                return self._safe_fetch_order_book(symbol, limit)
+            except OrderBookFetchError as exc:
+                last_exc = exc
+                backoff = 1 * (2**attempt)
+                time.sleep(backoff)
+
+        if last_exc:
+            raise last_exc
+        raise OrderBookFetchError(f"Order book fetch failed for {symbol}")
+
+    async def fetch_orderbook_with_retry(
+        self, symbol: str, limit: int = 20, retries: int = 2
+    ) -> dict:
+        last_exc: Exception | None = None
+        for attempt in range(retries + 1):
+            try:
+                return await asyncio.to_thread(
+                    self._safe_fetch_order_book, symbol, limit
+                )
+            except OrderBookFetchError as exc:
+                last_exc = exc
+                backoff = 1 * (2**attempt)
+                await asyncio.sleep(backoff)
+
+        if last_exc:
+            raise last_exc
+        raise OrderBookFetchError(f"Order book fetch failed for {symbol}")
 
     def fetch_order_book(self, symbol: str, limit: int = 20) -> dict:
         """
         Public API: Fetches L2 order book and normalizes to Decimal format.
         """
-        raw_ob = self._safe_fetch_order_book(symbol, limit)
+        raw_ob = self._fetch_order_book_with_retry(symbol, limit)
         if not raw_ob:
-            raise InsufficientLiquidityError(f"Could not fetch orderbook for {symbol}")
+            raise OrderBookFetchError(f"Could not fetch orderbook for {symbol}")
 
         try:
             if not raw_ob.get("bids") or not raw_ob.get("asks"):
@@ -200,11 +297,13 @@ class ExchangeClient:
         price: Decimal,
     ) -> dict:
         """
-        Place a LIMIT IOC (Immediate Or Cancel) order.
+        Place a LIMIT IOC (Immediate Or Cancel) order with adaptive price rounding.
         Expects Decimal for amount and price to avoid float precision loss.
         """
         safe_amount = round_quantity(amount, LOT_SIZE_STEP)
-        safe_price = round_price(price, PRICE_TICK)
+        # Use symbol-specific tick, with adaptive rounding for low prices
+        symbol_tick = self.get_price_tick(symbol)
+        safe_price = round_price_adaptive(price, symbol_tick)
         notional = safe_amount * safe_price
         if safe_amount <= Decimal("0"):
             raise ValueError("Order amount rounds to zero after LOT_SIZE_STEP")
