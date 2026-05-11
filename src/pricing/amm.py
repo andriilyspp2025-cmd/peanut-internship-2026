@@ -147,6 +147,11 @@ class UniswapV2Pair:
             {"to": address.checksum, "data": "0xd21220a7"}
         )
 
+        if not token0_addr_bytes or not token1_addr_bytes:
+            raise ValueError(
+                f"No contract data for pool {address.checksum}; check address or RPC"
+            )
+
         t0_addr_str = client.w3.to_checksum_address(
             "0x" + token0_addr_bytes[-20:].hex()
         )
@@ -175,6 +180,10 @@ class UniswapV2Pair:
         reserves_bytes = client.w3.eth.call(
             {"to": address.checksum, "data": "0x0902f1ac"}
         )
+        if not reserves_bytes or len(reserves_bytes) < 64:
+            raise ValueError(
+                f"getReserves returned empty for {address.checksum}; pool may be V3"
+            )
         reserve0 = int.from_bytes(reserves_bytes[0:32], "big")
         reserve1 = int.from_bytes(reserves_bytes[32:64], "big")
 

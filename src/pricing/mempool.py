@@ -52,6 +52,8 @@ class MempoolMonitor:
         http_url: str | None = None,
         callback: Callable[[ParsedSwap], None] = None,
         router_address: str = UNISWAP_V2_ROUTER,
+        wss_retries: int = 3,
+        wss_backoff_sec: float = 1.0,
     ):
         self.wss_url = wss_url
         self.http_url = http_url
@@ -60,6 +62,8 @@ class MempoolMonitor:
         self.router_address = router_address
         self.w3: AsyncWeb3 | None = None
         self._http_w3: AsyncWeb3 | None = None
+        self.wss_retries = wss_retries
+        self.wss_backoff_sec = wss_backoff_sec
 
         self._ssl_context = ssl.create_default_context()
         self._ssl_context.check_hostname = False
@@ -109,31 +113,51 @@ class MempoolMonitor:
     async def start_listening(self):
         """Connects to WSS and streams pending transactions, falling back to HTTP polling."""
         if self.wss_url:
-            try:
-                await self._ensure_w3()
-                log.info("Connected to WSS. Listening to mempool...")
-                await self.w3.eth.subscribe("pending_transactions")
+            # Try to connect with retries/backoff before falling back to HTTP
+            for attempt in range(1, max(1, self.wss_retries) + 1):
+                try:
+                    # Reset any previous client to ensure a fresh connect
+                    self.w3 = None
+                    await self._ensure_w3()
+                    log.info("Connected to WSS. Listening to mempool...")
+                    await self.w3.eth.subscribe("pending_transactions")
 
-                async for message in self.w3.socket.process_subscriptions():
-                    result = message.get("result") or message.get("params", {}).get(
-                        "result"
+                    async for message in self.w3.socket.process_subscriptions():
+                        result = message.get("result") or message.get("params", {}).get(
+                            "result"
+                        )
+                        if result is None:
+                            continue
+
+                        if isinstance(result, bytes):
+                            tx_hash = "0x" + result.hex()
+                        else:
+                            tx_hash = str(result)
+
+                        asyncio.create_task(self._process_transaction(tx_hash))
+
+                    return
+                except Exception as exc:
+                    log.warning(
+                        "WSS mempool subscription attempt %d/%d failed: %s",
+                        attempt,
+                        self.wss_retries,
+                        exc,
                     )
-                    if result is None:
+                    # If there are more attempts left, wait with exponential backoff
+                    if attempt < self.wss_retries:
+                        backoff = self.wss_backoff_sec * (2 ** (attempt - 1))
+                        log.info(
+                            "Waiting %.1fs before next WSS reconnect attempt...",
+                            backoff,
+                        )
+                        await asyncio.sleep(backoff)
                         continue
-
-                    if isinstance(result, bytes):
-                        tx_hash = "0x" + result.hex()
                     else:
-                        tx_hash = str(result)
-
-                    asyncio.create_task(self._process_transaction(tx_hash))
-
-                return
-            except Exception as exc:
-                log.warning(
-                    "WSS mempool subscription failed (%s). Falling back to HTTP polling.",
-                    exc,
-                )
+                        log.warning(
+                            "Exceeded WSS reconnect attempts (%d). Falling back to HTTP polling.",
+                            self.wss_retries,
+                        )
 
         if self.http_url:
             await self._start_http_polling()

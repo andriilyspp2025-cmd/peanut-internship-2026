@@ -70,16 +70,24 @@ class ForkSimulator:
         """Compares Python-calculated output against local node simulation."""
         calculated = pair.get_amount_out(amount_in, token_in)
 
-        self.simulate_swap(
+        sim_result = self.simulate_swap(
             Address("0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"),
             {},
             Address("0x0000000000000000000000000000000000000000"),
         )
-        sim_out = calculated
+        if not sim_result.success:
+            return {
+                "calculated": calculated,
+                "simulated": None,
+                "difference": None,
+                "match": False,
+                "error": sim_result.error,
+            }
 
         return {
             "calculated": calculated,
-            "simulated": sim_out,
-            "difference": abs(calculated - sim_out),
-            "match": calculated == sim_out,
+            "simulated": None,
+            "difference": None,
+            "match": False,
+            "error": "simulation_output_unavailable",
         }
