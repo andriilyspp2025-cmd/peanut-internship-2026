@@ -41,15 +41,17 @@ CHIP/USDT was selected based on data, not intuition.
 | Metric                   | Value                                                                |
 | ------------------------ | -------------------------------------------------------------------- |
 | Starting capital         | $100.00                                                              |
-| Ending capital           | ~$99.80                                                              |
-| Total week PnL           | **-$0.202**                                                          |
-| Capital preserved        | **99.80%**                                                           |
-| Real executed trades     | **3**                                                                |
+| Ending capital           | ~$98.78                                                              |
+| Total week PnL           | **-$1.221**                                                          |
+| Capital preserved        | **98.78%**                                                           |
+| Real executed trades     | **12**                                                               |
 | Both directions executed | **YES** — BUY_DEX_SELL_CEX (Days 1, 5) and BUY_CEX_SELL_DEX (Day 2) |
 | Win rate                 | 0%                                                                   |
-| Max drawdown             | 0.202%                                                               |
+| Max drawdown             | 1.22%                                                                |
 | Total CEX fees           | ~$0.03                                                               |
 | Total DEX gas            | ~$0.22                                                               |
+
+Note: CEX fee and DEX gas totals were not recalculated after the liberal strictness batch; expect higher totals.
 
 ### What counts and what doesn't
 
@@ -65,6 +67,26 @@ CHIP/USDT was selected based on data, not intuition.
 | 1 | **1** | **17:55** | CHIP/USDT     | **BUY_DEX_SELL_CEX** | 0.34 bps  | **-$0.130** | Intentional pipeline test. TX:`a277aa80...` |
 | 2 | **2** | **18:53** | CHIP/USDT     | **BUY_CEX_SELL_DEX** | 104.3 bps | **-$0.035** | Fully autonomous. TX:`738cf130...`          |
 | 3 | **5** | **04:18** | CHIP/USDT#500 | **BUY_DEX_SELL_CEX** | 82.7 bps  | **-$0.037** | Autonomous, ~$15 size. TX:`9cfc2369...`     |
+
+### Liberal Strictness Batch (May 11, 13:45-13:59)
+
+Goal: increase trade count for the demo by relaxing risk strictness. Result: 9 real trades, all negative due to fixed costs at ~$5 size.
+
+- Total net PnL: **-$1.0195** (avg **-$0.1133** per trade)
+- Avg size: **$5.0995**, avg spread: **12.9248 bps**
+- Direction mix: 6 BUY_DEX_SELL_CEX, 3 BUY_CEX_SELL_DEX
+
+| # | Time | Pair | Direction | Spread (bps) | Net PnL | TX |
+| - | ---- | ---- | --------- | ------------ | ------- | -- |
+| 1 | 13:45:18 | CHIP/USDT | BUY_DEX_SELL_CEX | 12.9578 | -$0.1146 | https://arbiscan.io/tx/b3bb331928bd11056450022e91837793bfd7c22775d4dc68b014ce56763f643d |
+| 2 | 13:45:27 | CHIP/USDT | BUY_DEX_SELL_CEX | 12.1386 | -$0.1142 | https://arbiscan.io/tx/bdbf85bbc927fa75ec68de5f477fa7ac0c40b671ab26a0257e7c5b6ab30d07bd |
+| 3 | 13:49:27 | CHIP/USDT | BUY_DEX_SELL_CEX | 8.1580  | -$0.1161 | https://arbiscan.io/tx/f01566ac240e54fa9225c3eb25bddefff8bd387661f20c7cb6832d1bf2a09eb6 |
+| 4 | 13:49:34 | CHIP/USDT#500 | BUY_DEX_SELL_CEX | 12.7516 | -$0.1114 | https://arbiscan.io/tx/445391e160771702f3a1282d0f3d6eac616d4f22fe8eba8447eb004147293541 |
+| 5 | 13:49:40 | CHIP/USDT | BUY_DEX_SELL_CEX | 17.2136 | -$0.1115 | https://arbiscan.io/tx/998f6af8c0d7b55cb495d78ba324e28ce5bf330c40449dc6fbe66962a51d7823 |
+| 6 | 13:53:04 | CHIP/USDT#500 | BUY_DEX_SELL_CEX | 8.2563  | -$0.1168 | https://arbiscan.io/tx/67b9832b48386366b15ec30c3adf486d5031ee184f3c5baae8cef5fbb6d4b28a |
+| 7 | 13:57:30 | CHIP/USDT#500 | BUY_CEX_SELL_DEX | 16.7980 | -$0.1110 | https://arbiscan.io/tx/bd1836e3ea8fcc5e8d1d6d1c30a7eb7d439439e06f0d87cadb863d37ff452272 |
+| 8 | 13:59:04 | CHIP/USDT#500 | BUY_CEX_SELL_DEX | 10.2314 | -$0.1135 | https://arbiscan.io/tx/b96df77b739f5931f2c76d044de355d89f8bb5f4587db2bc846ee1b006ff93b8 |
+| 9 | 13:59:11 | CHIP/USDT#500 | BUY_CEX_SELL_DEX | 17.8176 | -$0.1105 | https://arbiscan.io/tx/3f121ae28b39956f0930bdee9a5b6ad0387baae479c7adb79c0528511c28b8a1 |
 
 ### Best and Worst Trade
 

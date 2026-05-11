@@ -214,7 +214,17 @@ class ArbBot:
             "dex_quote_map", {}
         )
 
+        pairs_env = os.getenv("PAIRS", "").strip()
+        pairs_filter = (
+            {pair.strip() for pair in pairs_env.split(",") if pair.strip()}
+            if pairs_env
+            else None
+        )
+
         for name, cfg in PAIRS_CONFIG.items():
+            if pairs_filter is not None and name not in pairs_filter:
+                logger.info("Pair %s disabled by PAIRS env", name)
+                continue
             if not cfg.get("enabled", True):
                 logger.info("Pool %s disabled in config", name)
                 continue
