@@ -24,5 +24,5 @@ Operational:
 - [x] Emergency flatten procedure documented
 - [x] Have Binance app/web ready for manual intervention
 
-Student signature: ________________  Date: ________
+Student signature: Andrii Lys  Date: 2026-05-05
 Instructor sign-off: ______________  Date: ________
