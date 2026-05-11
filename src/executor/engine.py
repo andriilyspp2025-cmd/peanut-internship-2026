@@ -34,11 +34,16 @@ class ExecutionContext:
     leg1_order_id: Optional[str] = None
     leg1_fill_price: Optional[Decimal] = None
     leg1_fill_size: Optional[Decimal] = None
+    leg1_success: bool = False
 
     leg2_venue: str = ""
     leg2_tx_hash: Optional[str] = None
     leg2_fill_price: Optional[Decimal] = None
     leg2_fill_size: Optional[Decimal] = None
+    leg2_success: bool = False
+
+    cex_order_id: Optional[str] = None
+    dex_tx_hash: Optional[str] = None
 
     started_at: float = field(default_factory=time.time)
     finished_at: Optional[float] = None
@@ -54,6 +59,10 @@ class ExecutorConfig:
     use_flashbots: bool = True
     simulation_mode: bool = True
     cex_slippage_bps: Decimal = Decimal("50")
+    dex_slippage_pct: Decimal = Decimal("0.97")  # 3% tolerance for low-liquidity tokens
+    dex_emergency_slippage_pct: Decimal = Decimal(
+        "0.05"
+    )  # 5% price move tolerance for emergency unwind
     default_arbitrum_gas_usd: Decimal = Decimal("0.10")
 
 
@@ -79,6 +88,20 @@ class Executor:
         self.circuit_breaker = CircuitBreaker()
         self.replay_protection = ReplayProtection()
 
+    @staticmethod
+    def _normalized_pair(pair: str) -> str:
+        return pair.split("#", 1)[0]
+
+    def _cex_symbol_for_pair(self, pair: str) -> str:
+        try:
+            from scripts.arb_bot import PAIRS_CONFIG as _PAIRS_CONFIG
+
+            return _PAIRS_CONFIG.get(pair, {}).get(
+                "cex_symbol", self._normalized_pair(pair)
+            )
+        except Exception:
+            return self._normalized_pair(pair)
+
     async def execute(self, signal: Signal) -> ExecutionContext:
         ctx = ExecutionContext(signal=signal)
 
@@ -96,7 +119,21 @@ class Executor:
         ctx.state = ExecutorState.VALIDATING
         if not signal.is_valid():
             ctx.state = ExecutorState.FAILED
-            ctx.error = "Signal invalid"
+            issues = signal.validation_issues()
+            ctx.error = (
+                "Signal invalid: " + "; ".join(issues) if issues else "Signal invalid"
+            )
+            logger.warning(
+                "Signal rejected | pair=%s | id=%s | issues=%s | spread=%s | net_pnl=%s | score=%s | inventory_ok=%s | within_limits=%s",
+                signal.pair,
+                signal.signal_id,
+                ", ".join(issues) if issues else "unknown",
+                signal.spread_bps,
+                signal.expected_net_pnl,
+                signal.score,
+                signal.inventory_ok,
+                signal.within_limits,
+            )
             return ctx
 
         # Execute based on leg order strategy
@@ -144,6 +181,9 @@ class Executor:
 
         ctx.leg1_fill_price = leg1["price"]
         ctx.leg1_fill_size = leg1["filled"]
+        ctx.leg1_success = True
+        ctx.leg1_order_id = leg1.get("order_id")
+        ctx.cex_order_id = leg1.get("order_id")
         ctx.state = ExecutorState.LEG1_FILLED
 
         # Leg 2: DEX
@@ -178,6 +218,9 @@ class Executor:
 
         ctx.leg2_fill_price = leg2["price"]
         ctx.leg2_fill_size = leg2["filled"]
+        ctx.leg2_success = True
+        ctx.leg2_tx_hash = leg2.get("tx_hash")
+        ctx.dex_tx_hash = leg2.get("tx_hash")
         ctx.actual_net_pnl = self._calculate_pnl(ctx)
         ctx.state = ExecutorState.DONE
         return ctx
@@ -212,6 +255,9 @@ class Executor:
 
         ctx.leg1_fill_price = leg1["price"]
         ctx.leg1_fill_size = leg1["filled"]
+        ctx.leg1_success = True
+        ctx.leg2_tx_hash = leg1.get("tx_hash")
+        ctx.dex_tx_hash = leg1.get("tx_hash")
         ctx.state = ExecutorState.LEG1_FILLED
 
         # Leg 2: CEX
@@ -246,6 +292,8 @@ class Executor:
 
         ctx.leg2_fill_price = leg2["price"]
         ctx.leg2_fill_size = leg2["filled"]
+        ctx.leg2_success = True
+        ctx.cex_order_id = leg2.get("order_id")
         ctx.actual_net_pnl = self._calculate_pnl(ctx)
         ctx.state = ExecutorState.DONE
         return ctx
@@ -258,6 +306,7 @@ class Executor:
                 "success": True,
                 "price": signal.cex_price * Decimal("1.0001"),
                 "filled": actual_size,
+                "order_id": "simulated",
             }
         # Real execution via ExchangeClient (Week 3 API)
         side = "buy" if signal.direction == Direction.BUY_CEX_SELL_DEX else "sell"
@@ -269,7 +318,7 @@ class Executor:
             else signal.cex_price * (Decimal("1") - slippage_multiplier)
         )
         result = self.exchange.create_limit_ioc_order(
-            symbol=signal.pair,
+            symbol=self._cex_symbol_for_pair(signal.pair),
             side=side,
             amount=actual_size,
             price=safe_price,
@@ -278,6 +327,7 @@ class Executor:
             "success": result["status"] == "filled",
             "price": Decimal(str(result["avg_fill_price"])),
             "filled": Decimal(str(result["amount_filled"])),
+            "order_id": result.get("id", ""),
             "error": result["status"],
         }
 
@@ -345,7 +395,12 @@ class Executor:
                 price = signal.dex_price * Decimal("0.9998")
             else:
                 price = signal.dex_price * Decimal("1.0002")
-            return {"success": True, "price": price, "filled": size}
+            return {
+                "success": True,
+                "price": price,
+                "filled": size,
+                "tx_hash": "simulated",
+            }
 
         logger.info(
             f"🚀 EXECUTING DEX LEG: {signal.direction.name} {size} {signal.pair}"
@@ -357,36 +412,54 @@ class Executor:
             if self.wallet_address is None:
                 raise ValueError("Executor missing wallet address for DEX execution")
 
-            base_sym, quote_sym = signal.pair.split("/")
+            clean_pair = self._normalized_pair(signal.pair)
+            base_sym, quote_sym = clean_pair.split("/")
+
+            try:
+                from scripts.arb_bot import PAIRS_CONFIG as _PAIRS_CONFIG
+
+                pair_cfg = _PAIRS_CONFIG.get(signal.pair, {})
+                fee_tier = pair_cfg.get("fee_tier", 10000)
+                dex_quote_sym = pair_cfg.get("dex_quote", quote_sym)
+            except Exception:
+                fee_tier = 10000
+                dex_quote_sym = quote_sym
+
+            if dex_quote_sym not in self.token_map:
+                raise KeyError(
+                    f"DEX quote token '{dex_quote_sym}' not in token_map for pair '{signal.pair}'"
+                )
+
             token_in_addr = self.pricing.client.w3.to_checksum_address(
                 self.token_map[base_sym]["address"]
             )
-            token_out_addr = self.pricing.client.w3.to_checksum_address(
-                self.token_map[quote_sym]["address"]
+            token_dex_quote_addr = self.pricing.client.w3.to_checksum_address(
+                self.token_map[dex_quote_sym]["address"]
             )
 
             if signal.direction == Direction.BUY_CEX_SELL_DEX:
-                t_in, t_out = token_in_addr, token_out_addr
+                t_in, t_out = token_in_addr, token_dex_quote_addr
                 decimals_in = self.token_map[base_sym]["decimals"]
-                decimals_out = self.token_map[quote_sym]["decimals"]
+                decimals_out = self.token_map[dex_quote_sym]["decimals"]
                 amount_in_dec = size
                 expected_out_dec = size * signal.dex_price
             else:
-                t_in, t_out = token_out_addr, token_in_addr
-                decimals_in = self.token_map[quote_sym]["decimals"]
+                t_in, t_out = token_dex_quote_addr, token_in_addr
+                decimals_in = self.token_map[dex_quote_sym]["decimals"]
                 decimals_out = self.token_map[base_sym]["decimals"]
                 amount_in_dec = size * signal.dex_price
                 expected_out_dec = size
 
             amount_in_wei = int(amount_in_dec * (Decimal(10) ** decimals_in))
             min_out_wei = int(
-                (expected_out_dec * Decimal("0.995")) * (Decimal(10) ** decimals_out)
+                (expected_out_dec * self.config.dex_slippage_pct)
+                * (Decimal(10) ** decimals_out)
             )
 
             params = {
                 "tokenIn": t_in,
                 "tokenOut": t_out,
-                "fee": 10000,
+                "fee": fee_tier,
                 "recipient": self.wallet_address.checksum,
                 "deadline": int(time.time()) + 120,
                 "amountIn": amount_in_wei,
@@ -398,8 +471,8 @@ class Executor:
                 address=self.pricing.client.w3.to_checksum_address(V3_ROUTER),
                 abi=V3_ROUTER_ABI,
             )
-            tx_data = router_contract.encodeABI(
-                fn_name="exactInputSingle", args=[params]
+            tx_data = router_contract.encode_abi(
+                abi_element_identifier="exactInputSingle", args=[params]
             )
 
             from src.chain.builder import TransactionBuilder
@@ -451,12 +524,13 @@ class Executor:
             unwind_side = (
                 "sell" if signal.direction == Direction.BUY_CEX_SELL_DEX else "buy"
             )
+            cex_symbol = self._cex_symbol_for_pair(signal.pair)
 
             max_retries = 3
             for attempt in range(max_retries):
                 try:
                     self.exchange.exchange.create_market_order(
-                        symbol=signal.pair,
+                        symbol=cex_symbol,
                         side=unwind_side,
                         amount=str(ctx.leg1_fill_size),
                     )
@@ -491,11 +565,14 @@ class Executor:
                 if signal.direction == Direction.BUY_DEX_SELL_CEX
                 else Direction.BUY_DEX_SELL_CEX
             )
-            slippage = Decimal("0.05")
             if emergency_direction == Direction.BUY_DEX_SELL_CEX:
-                emergency_dex_price = signal.dex_price * (Decimal("1") + slippage)
+                emergency_dex_price = signal.dex_price * (
+                    Decimal("1") + self.config.dex_emergency_slippage_pct
+                )
             else:
-                emergency_dex_price = signal.dex_price * (Decimal("1") - slippage)
+                emergency_dex_price = signal.dex_price * (
+                    Decimal("1") - self.config.dex_emergency_slippage_pct
+                )
 
             emergency_signal = replace(
                 signal,

@@ -1,8 +1,10 @@
 import csv
-import matplotlib.pyplot as plt
-from decimal import Decimal
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 
 from src.inventory.tracker import Venue
 
@@ -239,3 +241,59 @@ class PnLEngine:
         plt.tight_layout()
         plt.savefig(filepath)
         plt.close()
+
+
+JOURNAL_FIELDS = [
+    "timestamp",
+    "pair",
+    "direction",
+    "trade_size_usd",
+    "cex_price",
+    "dex_price",
+    "spread_bps",
+    "gas_cost_usd",
+    "net_pnl_usd",
+    "status",
+    "arbiscan_url",
+    "cex_order_id",
+]
+
+
+def save_to_journal(
+    ctx,
+    gas_cost_usd: Decimal,
+    filepath: str = "logs/trades_journal.csv",
+) -> None:
+    """Append a structured execution record to the trading journal CSV."""
+    timestamp = datetime.fromtimestamp(ctx.finished_at or ctx.started_at).isoformat()
+    trade_size_usd = ctx.signal.size * ctx.signal.cex_price
+    net_pnl = ctx.actual_net_pnl if ctx.actual_net_pnl is not None else Decimal("0")
+    arbiscan_url = (
+        f"https://arbiscan.io/tx/{ctx.dex_tx_hash}" if ctx.dex_tx_hash else ""
+    )
+    cex_order_id = ctx.cex_order_id or ctx.leg1_order_id or ""
+
+    path = Path(filepath)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    file_exists = path.exists()
+
+    row = {
+        "timestamp": timestamp,
+        "pair": ctx.signal.pair,
+        "direction": ctx.signal.direction.name,
+        "trade_size_usd": str(trade_size_usd),
+        "cex_price": str(ctx.signal.cex_price),
+        "dex_price": str(ctx.signal.dex_price),
+        "spread_bps": str(ctx.signal.spread_bps),
+        "gas_cost_usd": str(gas_cost_usd),
+        "net_pnl_usd": str(net_pnl),
+        "status": ctx.state.name,
+        "arbiscan_url": arbiscan_url,
+        "cex_order_id": cex_order_id,
+    }
+
+    with path.open("a", newline="") as csvfile:
+        writer = csv.DictWriter(csvfile, fieldnames=JOURNAL_FIELDS)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
