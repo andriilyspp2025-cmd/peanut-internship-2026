@@ -209,3 +209,12 @@ __marimo__/
 codecopy
 arb_opportunities.csv
 demo_pnl_chart.png
+
+# ── Arbitrage Bot Runtime Artifacts ──────────────────────────────────────────
+# Логи бота (генеруються при кожному запуску)
+logs/
+
+# Кешовані ціни та стан
+price_cache*.json
+*.tmp
+trades_journal.csv

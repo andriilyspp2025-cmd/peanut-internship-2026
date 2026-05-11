@@ -235,6 +235,30 @@ tests/
 
 ---
 
+## Outputs and Artifacts
+
+Where to find the deliverables and runtime outputs:
+
+- Journals (daily):
+  - [journal/day1_first_trades.md](journal/day1_first_trades.md)
+  - [journal/day2_confidence.md](journal/day2_confidence.md)
+  - [journal/day3_lecture_trading.md](journal/day3_lecture_trading.md)
+  - [journal/day4_tuning.md](journal/day4_tuning.md)
+  - [journal/day5_final.md](journal/day5_final.md)
+- Reports:
+  - [reports/final_report.md](reports/final_report.md)
+  - [reports/advanced_strategy_analysis.md](reports/advanced_strategy_analysis.md)
+- Data exports :
+  - Executed trades JSON: [data/executed_trades.json](data/executed_trades.json)
+  - Daily trades CSV:
+    - [data/signals/trades_journal-day-1.csv](data/signals/trades_journal-day-1.csv)
+    - [data/signals/trades_journal-day-2.csv](data/signals/trades_journal-day-2.csv)
+    - [data/signals/trades_journal-day-3.csv](data/signals/trades_journal-day-3.csv)
+    - [data/signals/trades_journal-day-4.csv](data/signals/trades_journal-day-4.csv)
+    - [data/signals/trades_journal-day-5.csv](data/signals/trades_journal-day-5.csv)
+
+---
+
 ## Tech Stack
 
 * Python 3.10+
